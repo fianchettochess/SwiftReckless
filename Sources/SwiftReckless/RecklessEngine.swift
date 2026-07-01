@@ -27,6 +27,15 @@
 import Foundation
 import CReckless
 
+// Swift 6 strict concurrency: the C `stderr` global (from Android NDK stdio.h)
+// is declared as a mutable variable, which the compiler flags as shared mutable
+// state.  We route all diagnostic output through this nonisolated helper instead
+// of calling fputs(_, stderr) directly.
+@inline(__always)
+private func recklessLog(_ message: String) {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+}
+
 /// A live Reckless engine instance.
 ///
 /// Talk to it in UCI: send commands with ``send(_:)`` and read replies from
@@ -82,7 +91,7 @@ public final class RecklessEngine: @unchecked Sendable {
             RecklessNetworkLoader.network.filename
         )
         guard FileManager.default.fileExists(atPath: netFile.path) else {
-            fputs("[RecklessEngine] net file not found: \(netFile.path)\n", stderr)
+            recklessLog("[RecklessEngine] net file not found: \(netFile.path)")
             continuation.finish()
             return nil
         }

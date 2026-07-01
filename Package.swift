@@ -89,15 +89,25 @@ if useBinaryEngine {
     ]
 } else {
     // NON-APPLE / forced-source path: the Rust static lib must be built and
-    // placed at the path referenced by RECKLESS_LIB_DIR, then linked manually
-    // via linkerSettings.  This is the path taken by the Android (Skip) build.
+    // placed at the directory referenced by RECKLESS_LIB_DIR, then linked
+    // manually via linkerSettings.  This is the path taken by the Android
+    // (Skip / SkipFuse) build.
     //
-    // Typical invocation:
+    // Typical invocation (Android cross-build):
     //   RECKLESS_LIB_DIR=/path/to/rust/target/aarch64-linux-android/release \
-    //   swift build
+    //   SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 \
+    //   swift build --swift-sdk aarch64-android
     //
-    // TODO: wire RECKLESS_LIB_DIR into Package.swift once the Rust crate is
-    // production-ready (needs the reckless engine dependency vendored).
+    // RECKLESS_LIB_DIR must point to the DIRECTORY that contains libcreckless.a
+    // (not the .a itself). The linker flag passes the full path to the archive.
+    //
+    // Fallback: if RECKLESS_LIB_DIR is unset we fall back to the macOS host
+    // release path so `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 swift build` works
+    // on a developer machine without extra env setup.
+    let libDir = Context.environment["RECKLESS_LIB_DIR"]
+        ?? "/build/user_/Documents/SwiftReckless/rust/target/release"
+    let libPath = libDir + "/libcreckless.a"
+
     engineTargets = [
         .target(
             name: "CReckless",
@@ -109,15 +119,17 @@ if useBinaryEngine {
             ],
             linkerSettings: [
                 // Link the locally-built Rust static library by passing its
-                // absolute path directly to the linker.  This is more reliable
-                // than -L/-l on Apple's ld, which can silently skip the .a
-                // when the Swift driver passes flags via clang's -Xlinker.
+                // absolute path directly to the linker.  Passing the full path
+                // (rather than -L/-l) is required for ELF/Android targets where
+                // the Swift driver's -Xlinker passthrough can silently drop
+                // positional flags when wrapped through clang.
                 // Build the .a first:
-                //   cargo build --release --manifest-path rust/Cargo.toml
-                // Then:
-                //   SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 swift build
+                //   cargo build --release \
+                //     --target aarch64-linux-android \
+                //     --manifest-path rust/Cargo.toml
+                // Then set RECKLESS_LIB_DIR to the output directory.
                 .unsafeFlags([
-                    "/build/user_/Documents/SwiftReckless/rust/target/release/libcreckless.a",
+                    libPath,
                     "-lc++",
                 ]),
             ]
