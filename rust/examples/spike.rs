@@ -16,6 +16,26 @@ use std::io::{Read, Write};
 use std::os::unix::io::FromRawFd;
 
 fn main() {
+    // The NNUE net is no longer baked into the binary — load it at startup.
+    let net_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/networks/v54-5478683c.nnue"
+    );
+    if !std::path::Path::new(net_path).exists() {
+        eprintln!(
+            "SPIKE FAIL: NNUE net not found at {net_path}\n\
+             Download it with:\n  \
+             curl -L -o {net_path} \
+             https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v54-5478683c.nnue"
+        );
+        std::process::exit(1);
+    }
+    let net_bytes = std::fs::read(net_path).expect("failed to read NNUE net");
+    reckless::nnue::load_network(&net_bytes).unwrap_or_else(|e| {
+        if !e.contains("already loaded") {
+            panic!("load_network failed: {e}");
+        }
+    });
     // ── 1. Save real stdout ────────────────────────────────────────────────────
     let saved_stdout_fd = unsafe { libc::dup(libc::STDOUT_FILENO) };
     assert!(saved_stdout_fd >= 0, "dup(stdout) failed");

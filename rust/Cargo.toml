@@ -29,9 +29,11 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 # libc is needed for c_char, c_void types in the FFI surface.
 libc = "0.2"
-# Vendored + minimally-forked Reckless engine (adds lib.rs + [lib] target,
-# no engine-logic changes).  See vendor/reckless/src/lib.rs.
-reckless = { path = "vendor/reckless", default-features = false }
+# Our maintained fork of Reckless (github.com/jaredbrewer/Reckless, branch
+# `swiftreckless` on tag v0.9.0): two patches on top of upstream — a [lib]
+# target + runtime NNUE loading. Pinned by rev for reproducibility; to pull
+# upstream, rebase the fork branch and bump this rev.
+reckless = { git = "https://github.com/jaredbrewer/Reckless.git", rev = "b9ecb5c930124ee67ef8ed25881a6ab62e1b078a", default-features = false }
 
 [profile.release]
 lto = "fat"

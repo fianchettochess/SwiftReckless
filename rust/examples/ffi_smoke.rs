@@ -66,9 +66,26 @@ fn fail(msg: &str, lines: &[String]) -> ! {
 }
 
 fn main() {
+    // Locate the NNUE net relative to the crate manifest directory.
+    // The net is no longer baked into the binary — it must be present on disk.
+    let net_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/networks/v54-5478683c.nnue"
+    );
+    if !std::path::Path::new(net_path).exists() {
+        eprintln!(
+            "FAIL: NNUE net not found at {net_path}\n\
+             Download it with:\n  \
+             curl -L -o {net_path} \
+             https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v54-5478683c.nnue"
+        );
+        std::process::exit(1);
+    }
+
     let collector = Arc::new(Collector::new());
 
-    let engine = unsafe { rk_ffi_create(std::ptr::null()) };
+    let net_cstr = std::ffi::CString::new(net_path).unwrap();
+    let engine = unsafe { rk_ffi_create(net_cstr.as_ptr()) };
     if engine.is_null() {
         fail("rk_ffi_create returned NULL — engine failed to start", &[]);
     }
@@ -105,7 +122,8 @@ fn main() {
     if !wait_for(&collector, |l| l.iter().any(|x| x.starts_with("bestmove")), Duration::from_secs(30)) {
         fail("timed out waiting for 'bestmove'", &collector.get_lines());
     }
-    eprintln!("✓ bestmove received");
+    let bestmove_line = collector.get_lines().into_iter().find(|l| l.starts_with("bestmove")).unwrap();
+    eprintln!("✓ bestmove received: {bestmove_line}");
 
     // destroy — must return promptly, no hang
     let t0 = Instant::now();

@@ -118,30 +118,49 @@ unsafe impl Sync for EngineState {}
 
 /// Create and start a Reckless engine instance.
 ///
-/// `network_path` is accepted for API symmetry with CStockfish but ignored —
-/// Reckless's NNUE net is compile-time embedded (no runtime loading needed).
+/// `network_path` must be a valid NUL-terminated C string pointing to the
+/// Reckless NNUE net file (e.g. "v54-5478683c.nnue").  NULL is no longer
+/// accepted — the net is required at runtime (no longer baked into the binary).
 ///
 /// Returns an opaque non-NULL pointer on success, NULL on failure.
 /// The returned pointer must be passed to rk_ffi_destroy exactly once.
 ///
 /// # Safety
-/// `network_path` must be a valid NUL-terminated C string or NULL.
+/// `network_path` must be a valid NUL-terminated C string or NULL (NULL → error).
 #[no_mangle]
 pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_void {
-    // Accept (and ignore) network_path for ABI symmetry.
-    #[cfg(debug_assertions)]
-    {
-        let path = if network_path.is_null() {
-            "(null — net is compile-time embedded)".to_owned()
-        } else {
-            CStr::from_ptr(network_path)
-                .to_str()
-                .unwrap_or("<invalid utf-8>")
-                .to_owned()
-        };
-        eprintln!("[creckless] rk_ffi_create: network_path={path} (ignored)");
+    // ── 0. Load NNUE net from the supplied path ───────────────────────────────
+    if network_path.is_null() {
+        eprintln!("[creckless] rk_ffi_create: network_path is NULL — net is required (no longer compile-time embedded)");
+        return std::ptr::null_mut();
     }
-    let _ = network_path;
+    let net_path_str = match CStr::from_ptr(network_path).to_str() {
+        Ok(s) => s.to_owned(),
+        Err(_) => {
+            eprintln!("[creckless] rk_ffi_create: network_path is not valid UTF-8");
+            return std::ptr::null_mut();
+        }
+    };
+    eprintln!("[creckless] rk_ffi_create: loading NNUE net from {net_path_str}");
+    let net_bytes = match std::fs::read(&net_path_str) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[creckless] rk_ffi_create: failed to read net file '{net_path_str}': {e}");
+            return std::ptr::null_mut();
+        }
+    };
+    match reckless::nnue::load_network(&net_bytes) {
+        Ok(()) => eprintln!("[creckless] rk_ffi_create: NNUE net loaded ({} bytes)", net_bytes.len()),
+        Err(e) => {
+            // "already loaded" is non-fatal (e.g. second engine creation in same process).
+            if e.contains("already loaded") {
+                eprintln!("[creckless] rk_ffi_create: NNUE net already loaded, continuing");
+            } else {
+                eprintln!("[creckless] rk_ffi_create: load_network failed: {e}");
+                return std::ptr::null_mut();
+            }
+        }
+    }
 
     // ── 1. Save real fd 0 and fd 1 ───────────────────────────────────────────
     let saved_stdin_fd = libc::dup(libc::STDIN_FILENO);
