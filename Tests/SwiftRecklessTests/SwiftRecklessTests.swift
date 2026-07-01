@@ -3,125 +3,94 @@ import Foundation
 @testable import SwiftReckless
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Suite 1 — Pure-logic / offline tests (always run, no engine required)
+// Suite 1 — Offline / pure-logic (always run, no engine, no net)
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Suite("RecklessNetworkLoader offline tests")
 struct NetworkLoaderTests {
 
-    @Test("Network spec has correct filename and SHA prefix")
+    @Test("Network spec is the pinned v54 net")
     func networkSpec() {
         let net = RecklessNetworkLoader.network
-        #expect(net.filename == "v60-7f587dfb.nnue")
-        #expect(net.shaPrefix == "7f587dfb")
+        #expect(net.filename == "v54-5478683c.nnue")
+        #expect(net.shaPrefix == "5478683c")
+        #expect(net.sha256 == "5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf")
         #expect(net.downloadURL.scheme == "https")
     }
 
-    @Test("Network filename encodes SHA prefix")
+    @Test("Filename encodes the SHA-256 prefix")
     func filenameEncodesSHA() {
         let net = RecklessNetworkLoader.network
-        // The filename convention is "v<n>-<sha8chars>.nnue"
-        let parts = net.filename
-            .replacingOccurrences(of: ".nnue", with: "")
-            .split(separator: "-")
+        let parts = net.filename.replacingOccurrences(of: ".nnue", with: "").split(separator: "-")
         #expect(parts.count == 2)
         #expect(String(parts[1]) == net.shaPrefix)
+        #expect(net.sha256.hasPrefix(net.shaPrefix))
     }
 
-    @Test("Loader constructs correctly")
-    func loaderInit() {
-        let loader = RecklessNetworkLoader()
-        // Sanity-check: initialising the loader does not crash.
-        let _ = loader
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Suite 2 — Engine init tests (offline; engine is STUBBED → always returns nil)
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Suite("RecklessEngine init tests")
-struct EngineInitTests {
-
-    @Test("Engine returns nil while FFI is stubbed")
-    func engineInitReturnsNilWhenStubbed() {
-        // The Rust FFI is stubbed: rk_ffi_create returns NULL, so
-        // RecklessEngine.init? returns nil.  This test documents and asserts
-        // the expected behaviour of the scaffold.  It will need updating once
-        // the real engine is wired in (it will return a non-nil engine, and
-        // this test should be changed to use a real network path).
-        let fakeNetURL = URL(fileURLWithPath: "/tmp/nonexistent.nnue")
-        let engine = RecklessEngine(networkFile: fakeNetURL)
-        #expect(engine == nil, "Expected nil while FFI is stubbed")
+    @Test("Engine init returns nil when the net is absent")
+    func initNilWithoutNet() {
+        // A directory that cannot contain the net → init? must fail gracefully.
+        let empty = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reckless-empty-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        #expect(RecklessEngine(networkDirectory: empty) == nil)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Suite 3 — Integration tests (gated; require SWIFTRECKLESS_INTEGRATION=1)
+// Suite 2 — Engine smoke (net-guarded; runs by default when the net is staged)
 // ─────────────────────────────────────────────────────────────────────────────
-// These tests download the NNUE net and run a live engine.  Gate them behind
-// an environment variable so they don't fire on a plain `swift test`.
-//
-// Run with:
-//   SWIFTRECKLESS_INTEGRATION=1 swift test --filter "RecklessIntegrationTests"
+// One test, one engine instance (the engine uses a process-wide output sink, so
+// concurrent engines would collide). Guarded on the gitignored dev net.
 
-@Suite("RecklessEngine integration tests")
-struct RecklessIntegrationTests {
+@Suite("RecklessEngine smoke")
+struct RecklessEngineSmokeTests {
 
-    private var isEnabled: Bool {
-        ProcessInfo.processInfo.environment["SWIFTRECKLESS_INTEGRATION"] == "1"
+    /// The gitignored dev net at <package>/rust/networks/, if present.
+    private static var stagedNetDir: URL? {
+        let dir = URL(fileURLWithPath: #filePath)   // .../Tests/SwiftRecklessTests/ThisFile.swift
+            .deletingLastPathComponent()            // SwiftRecklessTests
+            .deletingLastPathComponent()            // Tests
+            .deletingLastPathComponent()            // package root
+            .appendingPathComponent("rust/networks", isDirectory: true)
+        let net = dir.appendingPathComponent(RecklessNetworkLoader.network.filename)
+        return FileManager.default.fileExists(atPath: net.path) ? dir : nil
     }
 
-    @Test("Engine emits uciok after uci command")
-    func uciHandshake() async throws {
-        guard isEnabled else { return }
-
-        let support = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let netDir = support.appendingPathComponent("SwiftRecklessTests")
-        let netURL = try await RecklessNetworkLoader().ensure(in: netDir)
-
-        guard let engine = RecklessEngine(networkFile: netURL) else {
-            Issue.record("Engine returned nil — is the FFI wired in?")
-            return
+    /// Race the output stream against a timeout; true if a matching line arrives.
+    private func awaitLine(_ engine: RecklessEngine, timeout: Duration,
+                           where pred: @escaping @Sendable (String) -> Bool) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await line in engine.output where pred(line) { return true }
+                return false
+            }
+            group.addTask { (try? await Task.sleep(for: timeout)) != nil ? false : false }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
         }
-
-        engine.uci()
-
-        var gotUciOk = false
-        for await line in engine.output {
-            if line == "uciok" { gotUciOk = true; break }
-        }
-        #expect(gotUciOk)
-
-        engine.quit()
     }
 
-    @Test("Engine responds readyok to isready")
-    func isReadyHandshake() async throws {
-        guard isEnabled else { return }
-
-        let support = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let netDir = support.appendingPathComponent("SwiftRecklessTests")
-        let netURL = try await RecklessNetworkLoader().ensure(in: netDir)
-
-        guard let engine = RecklessEngine(networkFile: netURL) else {
-            Issue.record("Engine returned nil — is the FFI wired in?")
+    @Test("uci → uciok, isready → readyok, go → bestmove, end-to-end")
+    func fullHandshake() async throws {
+        guard let netDir = Self.stagedNetDir else {
+            // Net is gitignored; a fresh checkout / CI without it skips (passes).
             return
         }
+        guard let engine = RecklessEngine(networkDirectory: netDir) else {
+            Issue.record("RecklessEngine(networkDirectory:) returned nil — net present but engine failed to start")
+            return
+        }
+        defer { engine.quit() }
 
         engine.uci()
-        // Drain uci response.
-        for await line in engine.output { if line == "uciok" { break } }
+        #expect(await awaitLine(engine, timeout: .seconds(10)) { $0 == "uciok" }, "no uciok")
 
         engine.isReady()
-        var gotReadyOk = false
-        for await line in engine.output {
-            if line == "readyok" { gotReadyOk = true; break }
-        }
-        #expect(gotReadyOk)
+        #expect(await awaitLine(engine, timeout: .seconds(5)) { $0 == "readyok" }, "no readyok")
 
-        engine.quit()
+        engine.send("go depth 1")
+        #expect(await awaitLine(engine, timeout: .seconds(30)) { $0.hasPrefix("bestmove") }, "no bestmove")
     }
 }
