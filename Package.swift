@@ -108,12 +108,18 @@ if useBinaryEngine {
                 .headerSearchPath("."),
             ],
             linkerSettings: [
-                // Link the Rust static lib.  The caller must set this search
-                // path or pass -Xlinker flags to swift build.
-                // Example: -Xlinker -L/path/to/rust/target/<triple>/release
-                .linkedLibrary("creckless"),
-                // Rust static libs typically need the C++ standard library.
-                .linkedLibrary("c++"),
+                // Link the locally-built Rust static library by passing its
+                // absolute path directly to the linker.  This is more reliable
+                // than -L/-l on Apple's ld, which can silently skip the .a
+                // when the Swift driver passes flags via clang's -Xlinker.
+                // Build the .a first:
+                //   cargo build --release --manifest-path rust/Cargo.toml
+                // Then:
+                //   SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 swift build
+                .unsafeFlags([
+                    "/build/user_/Documents/SwiftReckless/rust/target/release/libcreckless.a",
+                    "-lc++",
+                ]),
             ]
         ),
     ]
@@ -149,6 +155,20 @@ let package = Package(
             name: "SwiftReckless",
             dependencies: ["CReckless"],
             path: "Sources/SwiftReckless"
+        ),
+        // End-to-end smoke: drives uci → uciok and optionally go depth 1 →
+        // bestmove.  Run as an executable (not a test) because the Reckless
+        // Rust engine hijacks process-global fd 1 (stdout), which collides
+        // with the XCTest capture harness.  All output goes to stderr.
+        //
+        // Usage:
+        //   SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 \
+        //   swift run --package-path /build/user_/Documents/SwiftReckless reckless-smoke
+        //
+        .executableTarget(
+            name: "reckless-smoke",
+            dependencies: ["SwiftReckless"],
+            path: "Sources/reckless-smoke"
         ),
         .testTarget(
             name: "SwiftRecklessTests",

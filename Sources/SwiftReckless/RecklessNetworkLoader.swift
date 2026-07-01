@@ -38,23 +38,27 @@ public struct RecklessNetworkLoader: Sendable {
     // When Reckless upgrades its net, update BOTH this constant AND the
     // build.rs constant (and re-run `cargo build`).
 
-    /// The single NNUE network Reckless v0.10 requires.
+    /// The single NNUE network Reckless v0.9 requires.
     public static let network = Network(
-        filename: "v60-7f587dfb.nnue",
-        // First 8 hex chars of the file's SHA-256.  The filename already
-        // encodes this, so the loader double-checks on download.
-        shaPrefix: "7f587dfb",
+        filename: "v54-5478683c.nnue",
+        // Full SHA-256 of the file.  The first 8 hex chars match the filename.
+        // Verified with: shasum -a 256 networks/v54-5478683c.nnue
+        sha256: "5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf",
         // Canonical download URL from the RecklessNetworks releases page.
         downloadURL: URL(string:
-            "https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v60-7f587dfb.nnue"
+            "https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v54-5478683c.nnue"
         )!
     )
 
     /// A descriptor for one NNUE network.
     public struct Network: Sendable {
         public let filename: String
-        public let shaPrefix: String
+        /// Full SHA-256 hex string of the network file.
+        public let sha256: String
         public let downloadURL: URL
+
+        /// First 8 hex characters of the SHA-256 (embedded in the filename).
+        public var shaPrefix: String { String(sha256.prefix(8)) }
     }
 
     /// Errors thrown by ``ensure(in:progress:)``.
@@ -117,7 +121,7 @@ public struct RecklessNetworkLoader: Sendable {
 
         // 2. If already present and valid, skip download.
         if fm.fileExists(atPath: destination.path),
-           (try? verify(fileAt: destination, shaPrefix: net.shaPrefix)) == true {
+           (try? verify(fileAt: destination, expectedSHA256: net.sha256)) == true {
             return destination
         }
 
@@ -129,7 +133,7 @@ public struct RecklessNetworkLoader: Sendable {
         defer { try? fm.removeItem(at: tempURL) }
 
         // 4. Verify.
-        guard (try? verify(fileAt: tempURL, shaPrefix: net.shaPrefix)) == true else {
+        guard (try? verify(fileAt: tempURL, expectedSHA256: net.sha256)) == true else {
             throw LoaderError.checksumMismatch(net.filename)
         }
 
@@ -203,9 +207,9 @@ public struct RecklessNetworkLoader: Sendable {
 
     // MARK: - Verification
 
-    /// Verify a file's SHA-256 starts with the given prefix.
-    private func verify(fileAt url: URL, shaPrefix: String) throws -> Bool {
-        guard !shaPrefix.isEmpty else { return false }
+    /// Verify a file's SHA-256 matches the given full hex digest.
+    private func verify(fileAt url: URL, expectedSHA256: String) throws -> Bool {
+        guard !expectedSHA256.isEmpty else { return false }
 
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             return false
@@ -221,12 +225,13 @@ public struct RecklessNetworkLoader: Sendable {
         }
         let digest = hasher.finalize()
         let hex = digest.map { String(format: "%02x", $0) }.joined()
-        return hex.hasPrefix(shaPrefix)
+        return hex == expectedSHA256
 #else
-        // TODO: add swift-crypto dependency in Package.swift for non-Apple
-        // platforms (same pattern as SwiftStockfish).  For now, skip
-        // verification on Linux/Android and trust the download.
-        return true
+        // On non-Apple platforms (Linux/Android), swift-crypto is not yet
+        // declared as a dependency in Package.swift.  Skip full verification
+        // and trust the download; at minimum the filename prefix match
+        // provides a weak sanity check.
+        return expectedSHA256.hasPrefix(url.deletingPathExtension().lastPathComponent.split(separator: "-").last.map(String.init) ?? "")
 #endif
     }
 }

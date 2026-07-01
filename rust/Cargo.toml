@@ -36,7 +36,13 @@ libc = "0.2"
 reckless = { git = "https://github.com/jaredbrewer/Reckless.git", rev = "b9ecb5c930124ee67ef8ed25881a6ab62e1b078a", default-features = false }
 
 [profile.release]
-lto = "fat"
+# LTO is disabled to ensure the C-exported rk_ffi_* symbols appear in
+# regular Mach-O object files inside libcreckless.a, which the Apple linker
+# (ld) requires for SYMDEF-based symbol resolution.  Fat/thin LTO on Apple
+# targets puts all code into LLVM bitcode objects that Apple ld cannot resolve
+# from a staticlib's __.SYMDEF table.  LTO can be re-enabled for the xcframework
+# (P3) build once we verify the xcframework build script handles it correctly.
+lto = false
 panic = "abort"
 codegen-units = 1
 opt-level = 3
