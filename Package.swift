@@ -53,9 +53,25 @@ let hostIsApple = false
 #endif
 
 // Set SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 to skip the xcframework and force the
-// caller-supplied-lib path (useful for CI that builds the Rust crate first).
-let useBinaryEngine = hostIsApple
-    && Context.environment["SWIFTRECKLESS_FORCE_SOURCE_BUILD"] != "1"
+// caller-supplied-lib path. Two intended callers:
+//   * the Android (Skip/SkipFuse) cross-build, which supplies an
+//     aarch64-linux-android `libcreckless.a` via RECKLESS_LIB_DIR;
+//   * a from-source macOS dev build via CLI `swift build`.
+let forceSource = Context.environment["SWIFTRECKLESS_FORCE_SOURCE_BUILD"] == "1"
+
+// HARDENING (learned the hard way — see the "not a mach-o file" incident): if
+// SWIFTRECKLESS_FORCE_SOURCE_BUILD ever leaks into the *Xcode GUI* environment
+// — e.g. someone runs `launchctl setenv SWIFTRECKLESS_FORCE_SOURCE_BUILD 1` to
+// prime an Android build session — then a plain iOS/macOS build in Xcode would
+// wrongly take the source arm and try to link the Android ELF `libcreckless.a`,
+// failing with "Archive member '/' not a mach-o file". Xcode, and every process
+// it spawns (including SwiftPM manifest evaluation), inherits
+// __CFBundleIdentifier=com.apple.dt.Xcode; the gradle/Skip Android build does
+// not. So when we detect we're under Xcode we ALWAYS use the xcframework — the
+// source arm stays reachable only from a real cross-build / CLI `swift build`.
+let underXcode = Context.environment["__CFBundleIdentifier"] == "com.apple.dt.Xcode"
+
+let useBinaryEngine = hostIsApple && (underXcode || !forceSource)
 
 // ── Engine targets ────────────────────────────────────────────────────────────
 let engineTargets: [Target]
