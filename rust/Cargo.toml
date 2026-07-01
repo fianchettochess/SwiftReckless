@@ -29,11 +29,9 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 # libc is needed for c_char, c_void types in the FFI surface.
 libc = "0.2"
-# NOTE (#97 assessment, 2026-07-01): Reckless is a BINARY crate with NO library
-# target, so it CANNOT be used as a plain git/crate dependency. The plan (see
-# RECKLESS_KICKOFF_ASSESSMENT.md, P1) is to VENDOR + minimally fork Reckless to
-# add a [lib] target, then depend on it by path:
-#   reckless = { path = "vendor/reckless" }
+# Vendored + minimally-forked Reckless engine (adds lib.rs + [lib] target,
+# no engine-logic changes).  See vendor/reckless/src/lib.rs.
+reckless = { path = "vendor/reckless", default-features = false }
 
 [profile.release]
 lto = "fat"
