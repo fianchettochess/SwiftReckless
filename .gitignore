@@ -1,0 +1,26 @@
+# Swift / SPM
+.build/
+*.o
+*.d
+DerivedData/
+
+# Xcode
+*.xcodeproj/
+xcuserdata/
+
+# Rust
+rust/target/
+Cargo.lock
+
+# NEVER COMMIT ENGINE WEIGHTS / NNUE NETS
+# (same policy as Fianchetto / SwiftStockfish)
+*.nnue
+*.onnx
+*.bin
+networks/
+
+# macOS
+.DS_Store
+
+# Temporary download parts
+*.part
