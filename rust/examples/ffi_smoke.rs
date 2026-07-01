@@ -4,19 +4,17 @@
 //
 // Exercises the REAL rk_ffi_* C ABI (not reckless::run directly), verifying the
 // full pipeline: create -> set_callback -> send "uci"/"isready"/"go" -> collect
-// output via the callback -> destroy.  Prints "── PASS" and exits 0 on success;
-// prints a "FAIL:" line and exits 1 otherwise.
+// output via the callback -> destroy.  Also proves fd 1 (stdout) is NOT hijacked
+// by printing directly to stdout while the engine is live.
+//
+// Prints results to STDOUT (not stderr) — the whole point of #97 is that stdout
+// is free while the engine is live, so using it here proves the fix works.
 //
 //   cargo run --example ffi_smoke
 //
-// WHY AN EXAMPLE, NOT A `#[test]`:  the FFI hijacks process-global fd 1 (stdout)
-// for the engine's lifetime — Rust's `println!` has no per-object redirect like
-// C++'s std::cout.  `cargo test`'s default stdout-capture harness ALSO grabs
-// fd 1, and the two collide: under `cargo test` (without --nocapture) the
-// engine's lines never reach the callback and the check fails.  As an example
-// there is no capture harness, so it runs deterministically.  (Same reason the
-// P1 spike is an example.)  On device this fd-1 hijack is low-impact because
-// apps log via os_log / logcat, not fd 1.
+// WHY AN EXAMPLE, NOT A `#[test]`:  Under `cargo test` the test harness itself
+// captures stdout; as an example there is no capture harness, so output appears
+// directly and we can verify the hijack-check marker on the terminal.
 
 use creckless::ffi::{
     rk_ffi_create, rk_ffi_destroy, rk_ffi_send_command, rk_ffi_set_output_callback,
@@ -60,20 +58,19 @@ fn wait_for<F: Fn(&[String]) -> bool>(collector: &Collector, pred: F, timeout: D
 }
 
 fn fail(msg: &str, lines: &[String]) -> ! {
-    eprintln!("FAIL: {msg}");
-    eprintln!("  lines received: {lines:?}");
+    println!("FAIL: {msg}");
+    println!("  lines received: {lines:?}");
     std::process::exit(1);
 }
 
 fn main() {
     // Locate the NNUE net relative to the crate manifest directory.
-    // The net is no longer baked into the binary — it must be present on disk.
     let net_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/networks/v54-5478683c.nnue"
     );
     if !std::path::Path::new(net_path).exists() {
-        eprintln!(
+        println!(
             "FAIL: NNUE net not found at {net_path}\n\
              Download it with:\n  \
              curl -L -o {net_path} \
@@ -90,6 +87,14 @@ fn main() {
         fail("rk_ffi_create returned NULL — engine failed to start", &[]);
     }
 
+    // ── HIJACK CHECK ─────────────────────────────────────────────────────────
+    // The engine is now live.  With the old dup2/pipe model, fd 1 would be
+    // redirected and this println! would go into the engine's pipe instead of
+    // the terminal.  With the new per-instance channel model, fd 1 is untouched
+    // and this line appears on the real terminal.
+    println!("STDOUT-NOT-HIJACKED");
+    // ──────────────────────────────────────────────────────────────────────────
+
     let ctx_ptr: *const c_void = Arc::as_ptr(&collector) as *const c_void;
     unsafe { rk_ffi_set_output_callback(engine, Some(collect_line), ctx_ptr) };
 
@@ -100,9 +105,9 @@ fn main() {
         fail("timed out waiting for 'uciok'", &collector.get_lines());
     }
     let after_uci = collector.get_lines();
-    eprintln!("── Lines after 'uci' ({} total) ──", after_uci.len());
+    println!("── Lines after 'uci' ({} total) ──", after_uci.len());
     for l in &after_uci {
-        eprintln!("  {l}");
+        println!("  {l}");
     }
     if !after_uci.iter().any(|l| l.starts_with("id name Reckless")) {
         fail("'id name Reckless' not found", &after_uci);
@@ -114,7 +119,7 @@ fn main() {
     if !wait_for(&collector, |l| l.iter().any(|x| x == "readyok"), Duration::from_secs(5)) {
         fail("timed out waiting for 'readyok'", &collector.get_lines());
     }
-    eprintln!("✓ readyok received");
+    println!("readyok received");
 
     // go depth 1 -> bestmove
     let go_cmd = CString::new("go depth 1").unwrap();
@@ -123,17 +128,17 @@ fn main() {
         fail("timed out waiting for 'bestmove'", &collector.get_lines());
     }
     let bestmove_line = collector.get_lines().into_iter().find(|l| l.starts_with("bestmove")).unwrap();
-    eprintln!("✓ bestmove received: {bestmove_line}");
+    println!("bestmove received: {bestmove_line}");
 
     // destroy — must return promptly, no hang
     let t0 = Instant::now();
     unsafe { rk_ffi_destroy(engine) };
     let dt = t0.elapsed();
-    eprintln!("── rk_ffi_destroy returned in {dt:?}");
+    println!("── rk_ffi_destroy returned in {dt:?}");
     if dt >= Duration::from_secs(10) {
-        eprintln!("FAIL: rk_ffi_destroy hung for {dt:?}");
+        println!("FAIL: rk_ffi_destroy hung for {dt:?}");
         std::process::exit(1);
     }
 
-    eprintln!("── PASS: all assertions met ──");
+    println!("── PASS: all assertions met ──");
 }

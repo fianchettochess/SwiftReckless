@@ -33,7 +33,7 @@ libc = "0.2"
 # `swiftreckless` on tag v0.9.0): two patches on top of upstream — a [lib]
 # target + runtime NNUE loading. Pinned by rev for reproducibility; to pull
 # upstream, rebase the fork branch and bump this rev.
-reckless = { git = "https://github.com/jaredbrewer/Reckless.git", rev = "b9ecb5c930124ee67ef8ed25881a6ab62e1b078a", default-features = false }
+reckless = { git = "https://github.com/jaredbrewer/Reckless.git", rev = "bd10570", default-features = false }
 
 [profile.release]
 # LTO is disabled to ensure the C-exported rk_ffi_* symbols appear in

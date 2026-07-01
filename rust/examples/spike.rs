@@ -1,5 +1,11 @@
-/// Spike: prove that Reckless can run in-process with fd 1 (stdout) redirected
-/// to a pipe, so the host can capture engine output.
+/// Spike: historical proof-of-concept that Reckless can run in-process with fd 1
+/// (stdout) redirected to a pipe, capturing engine output.
+///
+/// NOTE: This spike demonstrates the OLD fd-redirect model.  The production FFI
+/// (ffi.rs) now uses per-instance I/O (reckless::run_io + mpsc channel + output
+/// closure) with NO fd redirection.  This spike is retained as a regression
+/// baseline: it proves that reckless::run() with a VecDeque buffer still works
+/// (the binary/stdin path is unchanged).
 ///
 /// Model:
 ///   1. Save the real fd 1 (dup it aside).
@@ -7,9 +13,8 @@
 ///   3. dup2 write_end → fd 1.  Close write_end (fd 1 is now the engine's stdout).
 ///   4. Spin a reader thread draining read_end into a Vec<String>.
 ///   5. Call reckless::run(["uci", "quit"]) via buffer — CLI mode, no stdin needed.
-///      The engine processes "uci" (prints id/options/uciok to fd 1) then "quit" (exits).
-///   6. After run() returns: flush, dup2 saved_stdout → fd 1, close pipe write_end
-///      clone, join reader thread.
+///      The engine processes "uci" (emits id/options/uciok to stdout) then "quit".
+///   6. After run() returns: flush, dup2 saved_stdout → fd 1, join reader thread.
 ///   7. Assert PASS if captured lines contain "uciok" and "id name Reckless".
 use std::collections::VecDeque;
 use std::io::{Read, Write};
