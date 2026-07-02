@@ -128,7 +128,14 @@ if useBinaryEngine {
         .target(
             name: "CReckless",
             path: "Sources/CReckless",
-            sources: ["RecklessBridge.c"],
+            // RecklessHostStubs.c provides no-op rk_ffi_* for every NON-Android
+            // platform in this arm (guarded by #if !defined(__ANDROID__)), so
+            // the Skip/gradle HOST-introspection build (macOS host targeting
+            // arm64-apple-ios, same env as the Android cross-build) links
+            // WITHOUT the ELF .a. Without this, that host link failed
+            // ("archive member '/' not a mach-o file") and skipstone silently
+            // reused STALE transpiled Kotlin while gradle reported SUCCESS.
+            sources: ["RecklessBridge.c", "RecklessHostStubs.c"],
             publicHeadersPath: "include",
             cSettings: [
                 .headerSearchPath("."),
@@ -144,10 +151,15 @@ if useBinaryEngine {
                 //     --target aarch64-linux-android \
                 //     --manifest-path rust/Cargo.toml
                 // Then set RECKLESS_LIB_DIR to the output directory.
+                //
+                // ANDROID-ONLY: the .a here is an aarch64-linux-android ELF
+                // archive — linking it on any Apple pass is what produced the
+                // "not a mach-o file" failure. Non-Android builds of this arm
+                // resolve rk_ffi_* from RecklessHostStubs.c instead.
                 .unsafeFlags([
                     libPath,
                     "-lc++",
-                ]),
+                ], .when(platforms: [.android])),
             ]
         ),
     ]
