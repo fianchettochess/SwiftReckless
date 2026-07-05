@@ -12,6 +12,10 @@ xcuserdata/
 rust/target/
 Cargo.lock
 
+# Python bytecode from .github/scripts helpers — never commit build artifacts.
+__pycache__/
+*.pyc
+
 # NEVER COMMIT ENGINE WEIGHTS / NNUE NETS
 # (same policy as Fianchetto / SwiftStockfish)
 *.nnue
