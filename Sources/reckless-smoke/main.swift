@@ -1,9 +1,8 @@
 // reckless-smoke — end-to-end host smoke test for RecklessEngine.
 //
-// IMPORTANT: all status output goes to STDERR.  The Reckless engine hijacks
-// process-global fd 1 (stdout) while it is live.  Never print()/write to
-// stdout while a RecklessEngine is alive — use fputs(..., stderr) instead.
-// This is the app-integration rule: one engine owns stdout.
+// All status output goes to STDERR via `writeErr` (below) — keeping stdout clean
+// for the engine and avoiding fputs(_, stderr), whose C `stderr` global is not
+// concurrency-safe on Linux under Swift 6.
 //
 // The smoke test:
 //   1. Copies the dev net (rust/networks/v54-5478683c.nnue) into a temp dir.
@@ -20,8 +19,15 @@ import Foundation
 import SwiftReckless
 
 // ── stderr helper ─────────────────────────────────────────────────────────────
+// Write via FileHandle, not fputs(_, stderr): glibc's stdio.h declares the C
+// `stderr` global as a mutable `var`, which Swift 6 strict concurrency rejects as
+// shared mutable state on Linux (Apple's SDK happens to permit it). FileHandle is
+// portable + concurrency-clean — mirrors RecklessEngine's own stderr routing.
+func writeErr(_ raw: String) {
+    FileHandle.standardError.write(Data(raw.utf8))
+}
 func err(_ msg: String) {
-    fputs("[reckless-smoke] \(msg)\n", stderr)
+    writeErr("[reckless-smoke] \(msg)\n")
 }
 
 // ── Thread-safe line buffer using a serial DispatchQueue ──────────────────────
@@ -106,7 +112,7 @@ let collectSema = DispatchSemaphore(value: 0)
 let collectTask = Task.detached {
     for await line in engine.output {
         buf.append(line)
-        fputs("[engine] \(line)\n", stderr)
+        writeErr("[engine] \(line)\n")
     }
     collectSema.signal()
 }
