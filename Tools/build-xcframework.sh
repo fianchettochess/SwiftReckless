@@ -1,104 +1,127 @@
 #!/usr/bin/env bash
 # Tools/build-xcframework.sh
 #
-# Build the creckless Rust FFI crate for all Apple slices and assemble a
-# multi-arch xcframework for use as the SwiftPM `binaryTarget`.
+# Build the creckless Rust FFI crate for the FULL gamut of Apple slices and
+# assemble Frameworks/RecklessFFI.xcframework for use as the SwiftPM
+# `binaryTarget`. This mirrors SwiftStockfish's 10-slice xcframework so the
+# package is compatible with the full Swift Package Index platform matrix
+# (WASM excluded — Rust FFI + a UCI thread do not target wasm32).
 #
-# SLICES PRODUCED:
-#   ios-arm64                     — physical iPhone/iPad (A-series, M-series iPad)
-#   ios-arm64_x86_64-simulator    — Simulator: arm64 (M-chip Mac) + x86_64 (Intel Mac)
-#   macos-arm64_x86_64            — macOS: Apple Silicon + Intel
+# SLICES PRODUCED (10):
+#   ios-arm64                          — iPhone/iPad (A/M-series)
+#   ios-arm64_x86_64-simulator         — iOS Simulator (arm64 + x86_64)
+#   macos-arm64_x86_64                 — macOS (Apple Silicon + Intel)
+#   ios-arm64_x86_64-maccatalyst       — Mac Catalyst (arm64 + x86_64)
+#   tvos-arm64                         — Apple TV
+#   tvos-arm64_x86_64-simulator        — tvOS Simulator (arm64 + x86_64)
+#   watchos-arm64                      — Apple Watch (Series 5+/watchOS 6)
+#   watchos-arm64_x86_64-simulator     — watchOS Simulator (arm64 + x86_64)
+#   xros-arm64                         — Apple Vision Pro (visionOS)
+#   xros-arm64-simulator               — visionOS Simulator (arm64 only; Rust
+#                                        has no x86_64 visionOS-sim target)
 #
-# PERFORMANCE FLAGS (per-arch):
+# RUST TOOLCHAIN TIERS:
+#   * iOS / iOS-sim / macOS / Mac Catalyst are Rust TIER 2 (rustup targets),
+#     built with the default (stable) toolchain.
+#   * tvOS / watchOS / visionOS are Rust TIER 3 (no prebuilt std), built with a
+#     NIGHTLY toolchain + `-Z build-std=std,panic_abort` (compiles std from
+#     source per target). `creckless` is a `staticlib` — archived objects, no
+#     final link — so a tier-3 slice only needs to COMPILE (no per-platform
+#     linker/SDK dance). Verified: the crate + std build cleanly this way.
 #
-#   aarch64-apple-ios / aarch64-apple-darwin / aarch64-apple-ios-sim:
-#     +neon       — NEON SIMD (always present on ARMv8-A, i.e. every Apple Silicon
-#                   chip).  Activates Reckless's vectorised NNUE accumulator
-#                   (`forward/vectorized.rs`) and avoids the scalar fallback.
-#     We deliberately omit +dotprod / +fp16 to keep the binary compatible with
-#     older A-series chips (A9+).  If you target A15+ only, add:
-#       +dotprod,+fp16,+sve  for extra throughput.
+# PER-ARCH PERFORMANCE FLAGS:
+#   aarch64-*  : +neon                 (NEON is baseline on every Apple Silicon /
+#                                       A-series chip; activates Reckless's
+#                                       vectorised NNUE accumulator)
+#   x86_64-*   : +avx2,+bmi2,+popcnt   (present on all Intel Macs (Haswell 2013+)
+#                                       and the Rosetta x86_64 simulator)
 #
-#   x86_64-apple-darwin / x86_64-apple-ios-sim:
-#     +avx2       — 256-bit SIMD; required by Reckless's vectorised path.
-#     +bmi2       — PEXT/PDEP; used by Stockfish-style magic bitboard attacks
-#                   (Reckless may use the same trick).
-#     +popcnt     — Fast population-count; used heavily in move generation.
-#     These are available on all Intel Macs (Haswell 2013+) and the Rosetta
-#     x86_64 simulator on Apple Silicon.
-#
-# PREREQUISITES:
-#   rustup target add \
-#     aarch64-apple-ios \
-#     aarch64-apple-ios-sim \
-#     x86_64-apple-ios \
-#     aarch64-apple-darwin \
-#     x86_64-apple-darwin
-#
-# OUTPUT:
-#   Frameworks/RecklessFFI.xcframework
+# OUTPUT: Frameworks/RecklessFFI.xcframework  (gitignored; built on-demand or in
+# the release CI, never committed).
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 RUST_DIR="$REPO_ROOT/rust"
-CARGO="$HOME/.cargo/bin/cargo"
-[ -x "$CARGO" ] || CARGO="$(command -v cargo)"
+MANIFEST="$RUST_DIR/Cargo.toml"
 
-build() {
-    local target="$1"; shift
-    local flags="$1"; shift
-    echo "==> cargo build --release --target $target  RUSTFLAGS=\"$flags\""
-    RUSTFLAGS="$flags" "$CARGO" build --release \
-        --manifest-path "$RUST_DIR/Cargo.toml" \
-        --target "$target"
-}
+RUSTUP="$HOME/.cargo/bin/rustup"; [ -x "$RUSTUP" ] || RUSTUP="$(command -v rustup)"
+CARGO="$HOME/.cargo/bin/cargo";   [ -x "$CARGO" ]   || CARGO="$(command -v cargo)"
 
-# ── macOS ─────────────────────────────────────────────────────────────────────
-build aarch64-apple-darwin "-C target-feature=+neon"
-build x86_64-apple-darwin  "-C target-feature=+avx2,+bmi2,+popcnt"
+# Deployment floors — keep in lockstep with Package.swift's platforms so the
+# emitted objects are usable down to the package minimums.
+export IPHONEOS_DEPLOYMENT_TARGET=13.0
+export MACOSX_DEPLOYMENT_TARGET=10.15
+export TVOS_DEPLOYMENT_TARGET=13.0
+export WATCHOS_DEPLOYMENT_TARGET=6.0
+export XROS_DEPLOYMENT_TARGET=1.0
 
-MACOS_ARM="$RUST_DIR/target/aarch64-apple-darwin/release/libcreckless.a"
-MACOS_X86="$RUST_DIR/target/x86_64-apple-darwin/release/libcreckless.a"
-MACOS_FAT="$RUST_DIR/target/libcreckless-macos.a"
-lipo -create "$MACOS_ARM" "$MACOS_X86" -output "$MACOS_FAT"
-echo "==> lipo → $MACOS_FAT"
+NEON="-C target-feature=+neon"
+X86="-C target-feature=+avx2,+bmi2,+popcnt"
 
-# ── iOS device ────────────────────────────────────────────────────────────────
-build aarch64-apple-ios "-C target-feature=+neon"
-IOS_ARM="$RUST_DIR/target/aarch64-apple-ios/release/libcreckless.a"
+# Tier-2 targets (stable toolchain).
+STABLE_TARGETS=(
+  aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+  aarch64-apple-darwin x86_64-apple-darwin
+  aarch64-apple-ios-macabi x86_64-apple-ios-macabi
+)
+# Tier-3 targets (nightly + build-std).
+STD_TARGETS=(
+  aarch64-apple-tvos aarch64-apple-tvos-sim x86_64-apple-tvos
+  aarch64-apple-watchos aarch64-apple-watchos-sim x86_64-apple-watchos-sim
+  aarch64-apple-visionos aarch64-apple-visionos-sim
+)
 
-# ── iOS Simulator ─────────────────────────────────────────────────────────────
-build aarch64-apple-ios-sim "-C target-feature=+neon"
-build x86_64-apple-ios      "-C target-feature=+avx2,+bmi2,+popcnt"
+echo "==> Ensuring toolchains + targets"
+for t in "${STABLE_TARGETS[@]}"; do "$RUSTUP" target add "$t" >/dev/null 2>&1 || true; done
+"$RUSTUP" toolchain install nightly --profile minimal >/dev/null 2>&1 || true
+"$RUSTUP" component add rust-src --toolchain nightly >/dev/null 2>&1 || true
 
-IOS_SIM_ARM="$RUST_DIR/target/aarch64-apple-ios-sim/release/libcreckless.a"
-IOS_SIM_X86="$RUST_DIR/target/x86_64-apple-ios/release/libcreckless.a"
-IOS_SIM_FAT="$RUST_DIR/target/libcreckless-ios-sim.a"
-lipo -create "$IOS_SIM_ARM" "$IOS_SIM_X86" -output "$IOS_SIM_FAT"
-echo "==> lipo → $IOS_SIM_FAT"
+cargo_stable() { RUSTFLAGS="$2" "$CARGO" build --release --manifest-path "$MANIFEST" --target "$1"; }
+cargo_std()    { RUSTFLAGS="$2" "$RUSTUP" run nightly cargo build --release \
+                   -Z build-std=std,panic_abort --manifest-path "$MANIFEST" --target "$1"; }
+LIB() { printf '%s' "$RUST_DIR/target/$1/release/libcreckless.a"; }
+flags_for() { case "$1" in x86_64-*) printf '%s' "$X86";; *) printf '%s' "$NEON";; esac; }
 
-# ── Assemble xcframework ──────────────────────────────────────────────────────
+echo "==> Building tier-2 slices (stable)"
+for t in "${STABLE_TARGETS[@]}"; do cargo_stable "$t" "$(flags_for "$t")"; done
+echo "==> Building tier-3 slices (nightly -Z build-std)"
+for t in "${STD_TARGETS[@]}"; do cargo_std "$t" "$(flags_for "$t")"; done
+
+OUT="$RUST_DIR/target/xcf"; rm -rf "$OUT"; mkdir -p "$OUT"
+fat() { local o="$OUT/$1"; shift; lipo -create "$@" -output "$o"; printf '%s' "$o"; }
+
+IOS_DEV="$(LIB aarch64-apple-ios)"
+IOS_SIM="$(fat libcreckless-ios-sim.a         "$(LIB aarch64-apple-ios-sim)"     "$(LIB x86_64-apple-ios)")"
+MACOS="$(fat  libcreckless-macos.a            "$(LIB aarch64-apple-darwin)"      "$(LIB x86_64-apple-darwin)")"
+CAT="$(fat    libcreckless-maccatalyst.a      "$(LIB aarch64-apple-ios-macabi)"  "$(LIB x86_64-apple-ios-macabi)")"
+TVOS_DEV="$(LIB aarch64-apple-tvos)"
+TVOS_SIM="$(fat libcreckless-tvos-sim.a       "$(LIB aarch64-apple-tvos-sim)"    "$(LIB x86_64-apple-tvos)")"
+WATCH_DEV="$(LIB aarch64-apple-watchos)"
+WATCH_SIM="$(fat libcreckless-watchos-sim.a   "$(LIB aarch64-apple-watchos-sim)" "$(LIB x86_64-apple-watchos-sim)")"
+XROS_DEV="$(LIB aarch64-apple-visionos)"
+XROS_SIM="$(LIB aarch64-apple-visionos-sim)"   # arm64-only (no x86_64 visionOS sim target)
+
 HEADERS="$REPO_ROOT/Sources/CReckless/include"
 XCF="$REPO_ROOT/Frameworks/RecklessFFI.xcframework"
+mkdir -p "$REPO_ROOT/Frameworks"; rm -rf "$XCF"
 
-mkdir -p "$REPO_ROOT/Frameworks"
-rm -rf "$XCF"
-
+echo "==> Assembling xcframework (10 slices)"
 xcodebuild -create-xcframework \
-    -library "$IOS_ARM"     -headers "$HEADERS" \
-    -library "$IOS_SIM_FAT" -headers "$HEADERS" \
-    -library "$MACOS_FAT"   -headers "$HEADERS" \
-    -output "$XCF"
+  -library "$IOS_DEV"   -headers "$HEADERS" \
+  -library "$IOS_SIM"   -headers "$HEADERS" \
+  -library "$MACOS"     -headers "$HEADERS" \
+  -library "$CAT"       -headers "$HEADERS" \
+  -library "$TVOS_DEV"  -headers "$HEADERS" \
+  -library "$TVOS_SIM"  -headers "$HEADERS" \
+  -library "$WATCH_DEV" -headers "$HEADERS" \
+  -library "$WATCH_SIM" -headers "$HEADERS" \
+  -library "$XROS_DEV"  -headers "$HEADERS" \
+  -library "$XROS_SIM"  -headers "$HEADERS" \
+  -output "$XCF"
 
+rm -rf "$OUT"
 echo ""
 echo "==> Done: $XCF"
 echo "    Slices:"
 for slice in "$XCF"/*/; do echo "      $(basename "$slice")"; done
-echo ""
-echo "    Next steps:"
-echo "    1. swift build   # confirms SPM picks up the xcframework"
-echo "    2. (release only) zip it, then:"
-echo "       swift package compute-checksum Frameworks/RecklessFFI.xcframework.zip"
-echo "       for the url: binaryTarget in a tagged release."
-echo "    NOTE: the xcframework is gitignored — built on-demand, never committed."

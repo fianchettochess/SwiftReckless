@@ -1,0 +1,153 @@
+name: Release binary
+
+# Build RecklessFFI.xcframework in CI (all Apple slices), publish it as a GitHub
+# release asset, and tag a commit whose Package.swift references that asset by
+# `url:` + `checksum:` (binary lives in the release, not the repo). Mirrors the
+# SwiftStockfish release model.
+#
+# TRIGGERS: pushing a release tag (e.g. `0.9.0`) is the primary path; manual
+# workflow_dispatch (with a `version` input) is the fallback for re-cutting a tag
+# that already exists. Either way the run builds the xcframework, hashes it,
+# rewrites Package.swift to url+checksum, and FORCE-MOVES the tag onto that
+# rewritten commit — so the checksum in the tagged Package.swift always matches
+# the attached zip. The tag force-push uses GITHUB_TOKEN, which by GitHub's design
+# does NOT start another workflow run, so the push trigger cannot loop.
+#
+# WHY main is never pushed: `main` is intentionally kept PATH-BASED (its
+# binaryTarget points at Frameworks/RecklessFFI.xcframework, built on-demand). The
+# url-rewritten commit lives ONLY on the release TAG: we commit it on a DETACHED
+# HEAD, tag that commit, and push just the tag. `main` is never mutated.
+#
+# The xcframework carries the full Apple gamut (iOS / iOS-sim / macOS / Mac
+# Catalyst / tvOS / watchOS / visionOS). The tier-3 slices (tvOS/watchOS/visionOS)
+# are built with a nightly toolchain + `-Z build-std`; Tools/build-xcframework.sh
+# installs the toolchains it needs.
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version / tag (e.g. 0.9.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version and check for collisions
+        env:
+          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$'; then
+            echo "::error::invalid version '${VERSION}' — expected e.g. 0.9.0 (N.N.N[.-suffix])"
+            exit 1
+          fi
+          if ! git check-ref-format "refs/tags/${VERSION}"; then
+            echo "::error::version '${VERSION}' is not a valid git tag name"
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null \
+              || git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+              echo "::error::tag '${VERSION}' already exists — pick a new version, or delete the tag/release and re-dispatch"
+              exit 1
+            fi
+          fi
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            echo "::error::a release '${VERSION}' already exists — pick a new version or delete it first"
+            exit 1
+          fi
+          echo "version '${VERSION}' is valid and unused"
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # Build every Apple slice into Frameworks/RecklessFFI.xcframework. The
+      # script installs the rustup targets + the nightly/rust-src it needs for the
+      # tier-3 (tvOS/watchOS/visionOS) build-std slices.
+      - name: Build xcframework
+        run: |
+          chmod +x Tools/build-xcframework.sh
+          ./Tools/build-xcframework.sh
+
+      # Zip exactly as SwiftPM expects a binaryTarget archive.
+      - name: Zip xcframework for SPM
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            Frameworks/RecklessFFI.xcframework RecklessFFI.xcframework.zip
+
+      - name: Compute checksum
+        id: checksum
+        run: |
+          CHECKSUM="$(swift package compute-checksum RecklessFFI.xcframework.zip)"
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          echo "Computed checksum: $CHECKSUM"
+
+      - name: Create release and upload asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "${VERSION}" RecklessFFI.xcframework.zip \
+            --title "${VERSION}" \
+            --notes "Prebuilt multi-arch \`RecklessFFI.xcframework\` for SwiftReckless ${VERSION} (full Apple gamut: iOS / iOS-sim / macOS / Mac Catalyst / tvOS / watchOS / visionOS).
+
+          Consume via SwiftPM at this tag — \`Package.swift\` pins this asset by \`url:\` + \`checksum:\`. The binary lives in this release (not in git). NNUE nets load at runtime via RecklessNetworkLoader."
+          if ! gh release view "${VERSION}" --json assets \
+              --jq '.assets[].name' | grep -qxF 'RecklessFFI.xcframework.zip'; then
+            echo "::error::release asset RecklessFFI.xcframework.zip did not upload"
+            exit 1
+          fi
+
+      - name: Rewrite Package.swift to url + checksum
+        env:
+          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+          REPO: ${{ github.repository }}
+          CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/rewrite_binary_target.py \
+            "https://github.com/${REPO}/releases/download/${VERSION}/RecklessFFI.xcframework.zip" \
+            "${CHECKSUM}"
+          swift package dump-package >/dev/null
+
+      # main already gitignores the xcframework (built on-demand), so the git rm is
+      # a no-op; keep it + the zip removal so a `git add -A` can never sweep the
+      # binary or the release zip into the tagged commit.
+      - name: Drop any committed binary + release zip; ignore future ones
+        run: |
+          git rm -rf --ignore-unmatch Frameworks/RecklessFFI.xcframework
+          rm -f RecklessFFI.xcframework.zip
+          for pat in 'Frameworks/*.xcframework' 'RecklessFFI.xcframework.zip'; do
+            grep -qxF "$pat" .gitignore || printf '%s\n' "$pat" >> .gitignore
+          done
+
+      - name: Commit rewritten manifest on a detached tag commit
+        env:
+          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --detach
+          git add Package.swift .gitignore
+          git commit -m "Release ${VERSION}: binary xcframework as a release asset"
+          git tag -f "${VERSION}"
+          git push --force origin "refs/tags/${VERSION}"

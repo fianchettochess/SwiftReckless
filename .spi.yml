@@ -1,0 +1,15 @@
+# Swift Package Index manifest (.spi.yml).
+# Tells SPI to generate + host DocC documentation for the public Swift API
+# (the `SwiftReckless` target) on the package's Swift Package Index page.
+# Schema: https://github.com/SwiftPackageIndex/SPIManifest
+#
+# Platform compatibility: the RecklessFFI.xcframework carries the full Apple
+# gamut (iOS / iOS-sim / macOS / Mac Catalyst / tvOS / watchOS / visionOS), and
+# the source arm compiles on Linux (host stubs). WebAssembly is intentionally
+# unsupported — the engine is a Rust FFI staticlib driving a background UCI
+# thread, which does not target wasm32.
+version: 1
+builder:
+  configs:
+    - documentation_targets:
+        - SwiftReckless

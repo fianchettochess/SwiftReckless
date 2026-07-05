@@ -49,7 +49,7 @@ SwiftReckless/
 ├── Frameworks/                        # RecklessFFI.xcframework — built on-demand, GITIGNORED (never committed)
 └── Tools/
     ├── build-macos.sh                 # macOS fat lib → xcframework
-    ├── build-xcframework.sh           # All Apple slices (iOS device + sim + macOS)
+    ├── build-xcframework.sh           # Full Apple gamut (iOS/macOS/Mac Catalyst/tvOS/watchOS/visionOS)
     └── build-android.sh               # Android staticlibs via cargo-ndk
 ```
 
@@ -132,15 +132,17 @@ bash Tools/build-macos.sh   # produces Frameworks/RecklessFFI.xcframework
 swift build                 # binary arm links the freshly built xcframework
 ```
 
-### iOS (device + Simulator)
+### All Apple platforms (iOS, macOS, Mac Catalyst, tvOS, watchOS, visionOS)
 
 ```bash
-rustup target add \
-  aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios \
-  aarch64-apple-darwin x86_64-apple-darwin   # also needed for the macOS slice
 bash Tools/build-xcframework.sh
-# → Frameworks/RecklessFFI.xcframework  (3 slices: ios-arm64, ios-arm64_x86_64-simulator, macos-arm64_x86_64)
+# → Frameworks/RecklessFFI.xcframework  (10 slices — the full Apple gamut)
 ```
+
+The script installs the rustup targets it needs, plus a nightly toolchain +
+`rust-src` for the Rust Tier-3 platforms (tvOS/watchOS/visionOS), which it builds
+from source via `-Z build-std`. No manual `rustup target add` is required. This
+is the same xcframework the release CI publishes as a `url:` asset.
 
 **Per-arch SIMD flags** (baked into the build scripts):
 

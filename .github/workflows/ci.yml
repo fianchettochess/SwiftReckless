@@ -1,0 +1,45 @@
+name: CI
+
+# Per-push build + test of the SOURCE arm (host stubs) on Linux and macOS.
+#
+# The BINARY arm (the real Rust engine via RecklessFFI.xcframework) is heavy to
+# build — 10 Apple slices, including nightly `-Z build-std` for tvOS/watchOS/
+# visionOS — so it is validated by the Release workflow, which builds + publishes
+# the xcframework. This CI guards the always-cheap source arm instead.
+#
+# Source arm: on non-Apple hosts (and under SWIFTRECKLESS_FORCE_SOURCE_BUILD=1),
+# Package.swift compiles the C bridge + RecklessHostStubs.c (no-op rk_ffi_*), so
+# the package builds without the Rust engine binary. The NNUE net is gitignored,
+# so the net-guarded engine smoke test skips-and-passes here.
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x86_64:
+    name: Linux x86_64 (source arm)
+    runs-on: ubuntu-latest
+    container: swift:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift build
+        run: swift build
+      - name: swift test
+        run: swift test
+
+  macos:
+    name: macOS (source arm, host stubs)
+    runs-on: macos-latest
+    env:
+      SWIFTRECKLESS_FORCE_SOURCE_BUILD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift build
+        run: swift build
+      - name: swift test
+        run: swift test
