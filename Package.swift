@@ -9,36 +9,34 @@
 //
 // ARCHITECTURE — three targets, mirroring SwiftStockfish:
 //
-//   CReckless         — C interop layer.  On Apple hosts in PATH MODE this
-//                       compiles the thin C bridge (`RecklessIO.h` +
+//   CReckless         — C interop layer.  On Apple hosts (binary arm) this
+//                       compiles the thin C bridge (`RecklessBridge.h` +
 //                       `RecklessBridge.c`) and links the pre-built static
-//                       library `libcreckless.a` via a `binaryTarget`.  The
-//                       static lib is the Rust FFI crate at `rust/` built for
-//                       the target arch with `cargo build --release` (see
-//                       Tools/build-xcframework.sh for the full recipe).  On
-//                       non-Apple hosts (Linux / Android) the same C bridge
-//                       compiles but the Rust lib must be provided externally
-//                       (see the TODO in the README and `linkerSettings` below).
+//                       library `libcreckless.a` via the `RecklessFFI`
+//                       binaryTarget (the Rust FFI crate at `rust/`, built by
+//                       Tools/build-xcframework.sh).  In the source arm
+//                       (Android / forced source) the same C bridge compiles;
+//                       the Rust lib is supplied via RECKLESS_LIB_DIR on
+//                       Android, and `RecklessHostStubs.c` provides no-op
+//                       symbols on every other host (see `linkerSettings` below).
 //
 //   SwiftReckless      — Swift-facing API: `RecklessEngine` (mirrors
 //                       `StockfishEngine`), `RecklessNetworkLoader` (fetches
 //                       the NNUE net at runtime, never committed to the repo).
 //
-//   SwiftRecklessTests — offline unit tests + (gated) integration tests.
+//   SwiftRecklessTests — offline loader unit tests + a net-guarded live engine smoke.
 //
-// BUILD STATUS (scaffold — see README "Status" section):
-//   * CReckless compiles on macOS once `libcreckless.a` exists at the path
-//     referenced by the binaryTarget below.  Run `Tools/build-macos.sh` first.
-//   * The Rust crate at `rust/` builds with `cargo build --release` (macOS
-//     host) but is STUBBED — it does not yet vendor/depend on the Reckless
-//     crate itself.  Wire that dependency in `rust/Cargo.toml` and supply the
-//     NNUE net (see README) before using in production.
-//   * Android: requires `cargo-ndk`; see README for the exact commands.
+// BUILD STATUS (wired & working — see README "Status" section):
+//   * The Rust crate at `rust/` depends on the maintained Reckless fork
+//     (github.com/jaredbrewer/Reckless, pinned rev) and drives it in-process;
+//     ffi.rs has real bodies. The NNUE net is loaded at runtime (never baked).
+//   * Apple (binary arm): run `Tools/build-macos.sh` (or build-xcframework.sh)
+//     once to produce `Frameworks/RecklessFFI.xcframework`, then `swift build`.
+//   * Android: source arm via `cargo-ndk` + RECKLESS_LIB_DIR (see README).
 //
-// PATH MODE on `main` (just like SwiftStockfish): `binaryTarget` points to
-// `Frameworks/RecklessFFI.xcframework` checked in alongside this manifest.
-// Once the xcframework is built and committed, `swift build` works with no
-// extra steps.  At release time CI rewrites the binaryTarget to url+checksum.
+// The `binaryTarget` points to `Frameworks/RecklessFFI.xcframework`, which is
+// built on-demand and GITIGNORED (never committed, ~90 MB) — a fresh clone must
+// build it once. At release time CI rewrites the binaryTarget to url+checksum.
 
 import PackageDescription
 
@@ -82,12 +80,11 @@ if useBinaryEngine {
     engineTargets = [
         .binaryTarget(
             name: "RecklessFFI",
-            // Built by Tools/build-xcframework.sh; not yet checked in.
-            // The xcframework carries three slices:
+            // Built on-demand by Tools/build-xcframework.sh; GITIGNORED, never
+            // committed. The xcframework carries three slices:
             //   ios-arm64
             //   ios-arm64_x86_64-simulator
             //   macos-arm64_x86_64
-            // TODO: run Tools/build-xcframework.sh and commit the result.
             path: "Frameworks/RecklessFFI.xcframework"
         ),
         .target(
@@ -117,11 +114,12 @@ if useBinaryEngine {
     // RECKLESS_LIB_DIR must point to the DIRECTORY that contains libcreckless.a
     // (not the .a itself). The linker flag passes the full path to the archive.
     //
-    // Fallback: if RECKLESS_LIB_DIR is unset we fall back to the macOS host
-    // release path so `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 swift build` works
-    // on a developer machine without extra env setup.
+    // Fallback: if RECKLESS_LIB_DIR is unset we fall back to the repo-relative
+    // host release path. In practice the Android arm (the only consumer of the
+    // libPath below — see the `.android` platform gate) always sets the var
+    // explicitly to a per-triple dir, so this default is rarely linked.
     let libDir = Context.environment["RECKLESS_LIB_DIR"]
-        ?? "/build/user_/Documents/SwiftReckless/rust/target/release"
+        ?? "rust/target/release"
     let libPath = libDir + "/libcreckless.a"
 
     engineTargets = [
@@ -197,13 +195,13 @@ let package = Package(
             path: "Sources/SwiftReckless"
         ),
         // End-to-end smoke: drives uci → uciok and optionally go depth 1 →
-        // bestmove.  Run as an executable (not a test) because the Reckless
-        // Rust engine hijacks process-global fd 1 (stdout), which collides
-        // with the XCTest capture harness.  All output goes to stderr.
+        // bestmove. A convenience CLI entry point that exercises the live engine
+        // outside the test harness; I/O is per-instance (no stdout/fd redirect),
+        // so its output won't collide with the test capture harness or other
+        // subsystems. (Only one live engine per process — see RecklessEngine.)
         //
-        // Usage:
-        //   SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 \
-        //   swift run --package-path /build/user_/Documents/SwiftReckless reckless-smoke
+        // Usage (Apple host uses the prebuilt xcframework):
+        //   swift run reckless-smoke
         //
         .executableTarget(
             name: "reckless-smoke",

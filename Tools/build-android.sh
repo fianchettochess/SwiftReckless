@@ -37,7 +37,7 @@
 #     +sse4.2,+popcnt — widest-safe x86 baseline; AVX2 is not safe to assume
 #                       on 32-bit x86.
 #
-# The NNUE weight file (v60-7f587dfb.nnue) is fetched at runtime by
+# The NNUE weight file (v54-5478683c.nnue) is fetched at runtime by
 # RecklessNetworkLoader, never embedded in the APK.
 #
 # OUTPUT:

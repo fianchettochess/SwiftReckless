@@ -36,11 +36,11 @@ typedef void (*RKOutputCallback)(const char *line, const void *context);
 /// Create and start a Reckless engine instance.
 ///
 /// `network_path` — NUL-terminated path to the NNUE network file
-///                  (`v60-7f587dfb.nnue`).  Must exist before calling;
-///                  Reckless loads the net during `run()` and panics if it
-///                  is missing.  Pass NULL to let the engine use its compiled-
-///                  in default path (only works if the net was embedded at
-///                  compile time via the `EVALFILE` env var — not the default).
+///                  (`v54-5478683c.nnue`).  Must be non-NULL and exist before
+///                  calling: `rk_create` loads the net at runtime and returns
+///                  NULL if the path is NULL, missing, or unreadable. (The fork
+///                  removed upstream's compile-time embed, so a net path is
+///                  always required.)
 ///
 /// Returns a non-NULL handle on success, NULL if engine initialisation failed.
 RKEngineRef rk_create(const char *network_path);

@@ -10,8 +10,8 @@
 //    let support = FileManager.default.urls(for: .applicationSupportDirectory,
 //                                           in: .userDomainMask)[0]
 //    let dir = support.appendingPathComponent("reckless-nets")
-//    let netURL = try await RecklessNetworkLoader().ensure(in: dir)
-//    guard let engine = RecklessEngine(networkFile: netURL) else { return }
+//    _ = try await RecklessNetworkLoader().ensure(in: dir)
+//    guard let engine = RecklessEngine(networkDirectory: dir) else { return }
 //
 
 import Foundation
@@ -29,14 +29,14 @@ import CryptoKit
 /// Downloads and verifies the Reckless NNUE network.
 ///
 /// The network filename encodes a SHA-256 prefix in its name (the same scheme
-/// Stockfish uses): `v60-7f587dfb.nnue`.  The loader verifies the first 8 hex
-/// chars of the SHA-256 of the downloaded file match `7f587dfb`.
+/// Stockfish uses): `v54-5478683c.nnue`.  The loader verifies the first 8 hex
+/// chars of the SHA-256 of the downloaded file match `5478683c`.
 public struct RecklessNetworkLoader: Sendable {
 
     // ── Current network spec ──────────────────────────────────────────────────
-    // Keep in sync with `build/build.rs` NETWORK_NAME in the Reckless source.
-    // When Reckless upgrades its net, update BOTH this constant AND the
-    // build.rs constant (and re-run `cargo build`).
+    // The net is loaded at RUNTIME (its path is passed to rk_create), not baked
+    // into the crate. When Reckless upgrades its net, update this constant only
+    // — no Rust rebuild is needed.
 
     /// The single NNUE network Reckless v0.9 requires.
     public static let network = Network(

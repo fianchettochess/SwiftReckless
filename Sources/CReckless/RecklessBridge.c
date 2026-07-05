@@ -9,10 +9,9 @@
 //   their final public names and is the ONLY file in CReckless that the Swift
 //   compiler's C module imports directly.
 //
-// STATUS: STUBBED — while the Rust crate at `rust/` does not yet vendor the
-//   real Reckless engine, these functions are backed by the stub implementations
-//   in rust/src/ffi.rs (which return NULL / no-op).  Replace the stub with the
-//   real engine link to activate.
+// STATUS: wired — these functions forward to the real rk_ffi_* bodies in
+//   rust/src/ffi.rs, which drive the Reckless engine (a maintained-fork git
+//   dependency) in-process.
 
 #include "RecklessBridge.h"
 #include <stddef.h>
