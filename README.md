@@ -219,9 +219,15 @@ documented in the Fianchetto memory files applies unchanged — the Swift API
 | Strength | ~3000 Elo (Super-GM level) |
 | Effective dependencies | With `default-features = false`, transitively just `libc`. `cc`/`bindgen` are optional build-deps behind the disabled `syzygy` feature. |
 
-**AGPL-3.0 compatibility note:** AGPL-3.0 is compatible with the GPLv3 Stockfish already
-shipped in Fianchetto. A combined binary (if ever shipped) must offer source for both
-engines. Consult legal before distributing over a network service (AGPL §13).
+**Licensing.** SwiftReckless is distributed under the **GNU Affero General Public
+License, version 3** (see [`LICENSE`](LICENSE)). Because it links the Reckless
+engine's compiled code directly into its output (the `RecklessFFI.xcframework` on
+Apple platforms, or the source-built `libcreckless` static library elsewhere), the
+whole package is an AGPL-3.0 artifact. AGPL-3.0 is compatible with the GPLv3
+Stockfish already shipped in Fianchetto; a combined binary (if ever shipped) must
+offer source for both engines. **AGPL §13 (Remote Network Interaction):** if you
+run a modified version as part of a network-accessible service, you must offer that
+service's users the Corresponding Source of your modified version.
 
 ---
 
