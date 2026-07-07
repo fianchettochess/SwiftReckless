@@ -41,6 +41,7 @@ import SwiftReckless
 // 1. Ensure the NNUE net exists in a writable directory.
 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
 let dir = support.appendingPathComponent("reckless-nets")
+// Progress fires once at completion (not incrementally).
 try await RecklessNetworkLoader().ensure(in: dir) { p in
     if let f = p.fractionCompleted { print("net: \(Int(f * 100))%") }
 }

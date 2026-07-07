@@ -10,7 +10,8 @@ file is missing or unreadable, so always ensure the net is present before creati
 the engine.
 
 `RecklessNetworkLoader.ensure(in:)` is idempotent: a valid, present net is never
-re-downloaded (it verifies the SHA-256 prefix and returns immediately). Only a
+re-downloaded (it verifies the full SHA-256 on Apple, or performs a weak
+filename-prefix sanity check on Linux/Android, and returns immediately). Only a
 missing or invalid file triggers a download.
 
 ```swift
@@ -31,6 +32,14 @@ try await RecklessNetworkLoader().ensure(in: netDir) { progress in
 The progress closure is called only when a download is in progress. On a warm
 launch where the net is already present and valid, `ensure` returns immediately
 without calling the closure.
+
+!!! note "Progress fires once — not a live counter"
+    The loader uses `URLSession.downloadTask(with:completionHandler:)`, which
+    reports progress inside the completion handler. The closure is called **once**,
+    at download completion, with `bytesDownloaded == totalBytes` (or 0 when the
+    server omitted `Content-Length`). It always prints a terminal `100%`; it does
+    not count up incrementally. Add a `URLSessionDownloadDelegate` if you need
+    live streaming progress.
 
 ## 2. Create the engine
 

@@ -12,7 +12,7 @@ SwiftReckless is a Swift Package Manager library.
 | watchOS | 6 |
 | visionOS | 1 |
 | Mac Catalyst | 13 |
-| Android | API 28 (arm64 · armv7 · x86_64 · x86, source build) |
+| Android | API 21 (Android 5.0 · arm64 · armv7 · x86_64 · x86, source build) |
 
 Swift tools version 6.0. See [Build model](concepts/build-model.md) for the full
 platform matrix and cross-compile details.
@@ -88,7 +88,7 @@ build step.
 
 ```bash
 swift build
-swift run reckless-smoke    # drives uci → uciok → isready → readyok → bestmove
+swift run reckless-smoke    # drives uci → uciok → go depth 1 → bestmove
 swift test                  # offline loader suite (net-guarded live engine smoke)
 ```
 

@@ -14,6 +14,8 @@ func makeEngine() async throws -> RecklessEngine {
     let netDir = support.appendingPathComponent("reckless-nets")
 
     // 1. Ensure the NNUE net is present. Idempotent — fast no-op if already valid.
+    // Note: the progress closure fires once at download completion (terminal
+    // byte count), not incrementally. fractionCompleted is 1.0 on success.
     try await RecklessNetworkLoader().ensure(in: netDir) { p in
         if let f = p.fractionCompleted {
             print("Downloading net: \(Int(f * 100))%")

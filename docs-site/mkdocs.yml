@@ -6,20 +6,31 @@ site_url: https://fianchettochess.app/docs/swiftreckless/
 
 docs_dir: docs
 
+extra_css:
+  - stylesheets/brand.css
+
+# The logo (top-left) links here — back to the main site. See also the
+# "All package docs" nav entry, which returns to the docs hub.
+extra:
+  homepage: https://fianchettochess.app/
+
 theme:
   name: material
+  logo: assets/icon.png
+  favicon: assets/icon.png
+  font: false          # use the system font stack (matches fianchettochess.app)
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: red
-      accent: red
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: red
-      accent: red
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
@@ -53,6 +64,7 @@ markdown_extensions:
   - pymdownx.details
 
 nav:
+  - ↩ All package docs: https://fianchettochess.app/docs/
   - Home: index.md
   - Installation: installation.md
   - Getting Started: getting-started.md
