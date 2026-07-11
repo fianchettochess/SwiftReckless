@@ -5,7 +5,8 @@
 //  A Swift wrapper over the C bridge in CReckless.  The bridge drives
 //  Reckless's UCI loop on a background thread (inside the Rust FFI crate)
 //  and delivers each output line via a C callback; this class turns that into
-//  an `AsyncStream<String>` and exposes a `send(_:)` for UCI commands.
+//  cancellation-safe ordered async output and exposes `send(_:)` for UCI
+//  commands.
 //
 //  PUBLIC SHAPE mirrors `StockfishEngine` in SwiftStockfish so that the app's
 //  existing UCIInfoParser / EngineProbe layer can be adapted to either engine
@@ -18,14 +19,158 @@
 //  returns nil if the file is missing or unreadable.
 //
 //  CONCURRENCY: one `RecklessEngine` per process — the Rust engine owns
-//  process-global tables.  Create, use, destroy one engine before making
-//  another.  `@unchecked Sendable` because the opaque `RKEngineRef` is treated
-//  as immutable after init and all mutations go through the Rust mutex inside
-//  the FFI crate.
+//  process-global tables. The FFI rejects overlap and, while the pinned fork's
+//  lookup initializer remains non-idempotent, rejects a second engine lifetime
+//  in the same process. `@unchecked Sendable` is backed by the teardown lock
+//  below and the Rust mutex/channel implementation.
 //
 
 import Foundation
 import CReckless
+
+/// Lock-protected, cancellation-safe FIFO backing ``RecklessOutput``.
+///
+/// `AsyncStream` cancellation terminates the stream's shared storage. That is
+/// unsafe for a process-lifetime engine: cancelling one search iterator would
+/// permanently close output for every later search. This storage treats task
+/// cancellation as cancellation of only the currently suspended waiter while
+/// retaining both the channel and any already-buffered lines.
+final class RecklessOutputStorage: @unchecked Sendable {
+    private struct Waiter {
+        let id: UInt64
+        let continuation: CheckedContinuation<String?, Never>
+    }
+
+    private let lock = NSLock()
+    private var buffered: [String] = []
+    private var bufferedStart = 0
+    private var waiters: [Waiter] = []
+    private var nextWaiterID: UInt64 = 0
+    private var isFinished = false
+
+    func next() async -> String? {
+        let id: UInt64 = lock.withLock {
+            nextWaiterID &+= 1
+            return nextWaiterID
+        }
+
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                if Task.isCancelled {
+                    lock.unlock()
+                    continuation.resume(returning: nil)
+                    return
+                }
+                if bufferedStart < buffered.count {
+                    let line = buffered[bufferedStart]
+                    bufferedStart += 1
+                    compactBufferIfNeededLocked()
+                    lock.unlock()
+                    continuation.resume(returning: line)
+                    return
+                }
+                if isFinished {
+                    lock.unlock()
+                    continuation.resume(returning: nil)
+                    return
+                }
+                waiters.append(Waiter(id: id, continuation: continuation))
+                lock.unlock()
+            }
+        } onCancel: {
+            cancelWaiter(id)
+        }
+    }
+
+    func yield(_ line: String) {
+        let waiter: Waiter?
+        lock.lock()
+        if isFinished {
+            waiter = nil
+        } else if waiters.isEmpty {
+            buffered.append(line)
+            waiter = nil
+        } else {
+            waiter = waiters.removeFirst()
+        }
+        lock.unlock()
+        waiter?.continuation.resume(returning: line)
+    }
+
+    func finish() {
+        let pending: [Waiter]
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isFinished = true
+        pending = waiters
+        waiters.removeAll(keepingCapacity: false)
+        lock.unlock()
+        for waiter in pending {
+            waiter.continuation.resume(returning: nil)
+        }
+    }
+
+    var waitingConsumerCount: Int {
+        lock.withLock { waiters.count }
+    }
+
+    private func cancelWaiter(_ id: UInt64) {
+        let waiter: Waiter?
+        lock.lock()
+        if let index = waiters.firstIndex(where: { $0.id == id }) {
+            waiter = waiters.remove(at: index)
+        } else {
+            waiter = nil
+        }
+        lock.unlock()
+        waiter?.continuation.resume(returning: nil)
+    }
+
+    private func compactBufferIfNeededLocked() {
+        guard bufferedStart > 64, bufferedStart * 2 >= buffered.count else { return }
+        buffered.removeFirst(bufferedStart)
+        bufferedStart = 0
+    }
+}
+
+/// Ordered, single-consumer output from a ``RecklessEngine``.
+///
+/// Unlike `AsyncStream`, cancelling an iterator does not finish the underlying
+/// engine channel. A later iterator resumes from the same FIFO. Multiple
+/// simultaneous iterators divide lines between themselves, so callers must
+/// still serialize logical consumers of the UCI command/output stream.
+public struct RecklessOutput: AsyncSequence, Sendable {
+    public typealias Element = String
+
+    public struct AsyncIterator: AsyncIteratorProtocol {
+        fileprivate let storage: RecklessOutputStorage
+
+        public func next() async -> String? {
+            await storage.next()
+        }
+    }
+
+    let storage: RecklessOutputStorage
+
+    init(storage: RecklessOutputStorage) {
+        self.storage = storage
+    }
+
+    public func makeAsyncIterator() -> AsyncIterator {
+        AsyncIterator(storage: storage)
+    }
+
+    /// Consume the next line without retaining a mutating iterator across an
+    /// actor suspension. This has the same single-consumer FIFO semantics as
+    /// ``makeAsyncIterator()``.
+    public func next() async -> String? {
+        await storage.next()
+    }
+}
 
 // Swift 6 strict concurrency: the C `stderr` global (from Android NDK stdio.h)
 // is declared as a mutable variable, which the compiler flags as shared mutable
@@ -50,24 +195,52 @@ private func recklessLog(_ message: String) {
 ///
 /// - Important: Only ONE `RecklessEngine` may be alive in a process at a time.
 ///   The Rust engine owns process-global state (lookup tables, NNUE weights).
+///   The currently pinned fork also supports only one successful engine
+///   lifetime per process; a later `init` returns `nil` rather than hanging.
 public final class RecklessEngine: @unchecked Sendable {
 
     // Opaque Rust handle (`const void *` in C, OpaquePointer in Swift).
     private let engine: RKEngineRef
 
-    // The output stream and its continuation.  The continuation is fed from the
-    // C callback, which fires on the Rust engine thread.  `AsyncStream.Continuation`
-    // is itself Sendable / thread-safe so no additional locking is needed here.
-    private let _output: AsyncStream<String>
-    private let continuation: AsyncStream<String>.Continuation
+    /// Orders every send before destroy and makes explicit teardown
+    /// idempotent. Without this, a send concurrent with shutdown could hand a
+    /// freed opaque pointer to the C bridge.
+    private let teardownLock = NSLock()
+    private var isShutdown = false
+
+    private let outputStorage = RecklessOutputStorage()
+
+    /// Cancellation-safe, process-lifetime UCI output. Prefer this surface for
+    /// consumers that cancel and restart searches on the same engine instance.
+    public var cancellationSafeOutput: RecklessOutput {
+        RecklessOutput(storage: outputStorage)
+    }
 
     /// An async stream of UCI output lines from the engine, in order.
     ///
     /// Lines are delivered without their trailing newline.  The stream is
     /// unbounded-buffered; iterate it promptly if you care about back-pressure.
-    /// It finishes when the engine is destroyed (`deinit` / ``quit()`` →
-    /// teardown).
-    public var output: AsyncStream<String> { _output }
+    /// It finishes when the engine is destroyed (`deinit` / ``shutdown()``).
+    /// Compatibility adapter for the shared `UCIEngine` protocol. The adapter
+    /// has its own sacrificial `AsyncStream`; cancelling it cancels only its
+    /// forwarding waiter in ``cancellationSafeOutput``, not the engine channel.
+    /// Long-lived generic consumers (such as Android's `EngineProbe`) create
+    /// this once. Restarting concrete Reckless consumers should use
+    /// ``cancellationSafeOutput`` directly.
+    public var output: AsyncStream<String> {
+        let source = cancellationSafeOutput
+        return AsyncStream(bufferingPolicy: .unbounded) { continuation in
+            let forwardingTask = Task {
+                for await line in source {
+                    guard case .enqueued = continuation.yield(line) else { break }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in
+                forwardingTask.cancel()
+            }
+        }
+    }
 
     /// Create and start a Reckless engine instance.
     ///
@@ -76,14 +249,9 @@ public final class RecklessEngine: @unchecked Sendable {
     ///   ``RecklessNetworkLoader/ensure(in:progress:)`` to provision it.
     ///
     /// - Returns: `nil` if the net file is not present in `networkDirectory`,
-    ///   or if the Rust FFI layer could not start the engine.
+    ///   if the Rust FFI layer could not start it, or if this process already
+    ///   used its one engine lifetime under the currently pinned fork.
     public init?(networkDirectory: URL) {
-        var continuation: AsyncStream<String>.Continuation!
-        self._output = AsyncStream(bufferingPolicy: .unbounded) { cont in
-            continuation = cont
-        }
-        self.continuation = continuation
-
         // Build the full path to the net file and verify it exists before
         // handing it to the Rust FFI (which returns NULL on failure, but
         // an explicit pre-check gives a clearer early-out).
@@ -92,12 +260,12 @@ public final class RecklessEngine: @unchecked Sendable {
         )
         guard FileManager.default.fileExists(atPath: netFile.path) else {
             recklessLog("[RecklessEngine] net file not found: \(netFile.path)")
-            continuation.finish()
+            outputStorage.finish()
             return nil
         }
 
         guard let ref = netFile.path.withCString({ rk_create($0) }) else {
-            continuation.finish()
+            outputStorage.finish()
             return nil
         }
         self.engine = ref
@@ -111,22 +279,35 @@ public final class RecklessEngine: @unchecked Sendable {
             guard let linePtr, let ctx else { return }
             let line = String(cString: linePtr)
             let me = Unmanaged<RecklessEngine>.fromOpaque(ctx).takeUnretainedValue()
-            me.continuation.yield(line)
+            me.outputStorage.yield(line)
         }, context)
     }
 
     deinit {
-        // rk_destroy sends "quit", joins the Rust engine thread, and frees all
-        // memory.  After it returns no further callbacks can fire.
-        rk_destroy(engine)
-        continuation.finish()
+        shutdown()
     }
 
     // MARK: - Raw UCI
 
     /// Send a raw UCI command string (no trailing newline needed).
     public func send(_ command: String) {
+        teardownLock.lock()
+        defer { teardownLock.unlock() }
+        guard !isShutdown else { return }
         command.withCString { rk_send_command(engine, $0) }
+    }
+
+    /// Destroy the engine, join its background thread, and finish ``output``.
+    /// Idempotent and safe to race with ``send(_:)``. The join can block while
+    /// a search winds down, so call this from a background context rather than
+    /// the main actor when deterministic teardown timing matters.
+    public func shutdown() {
+        teardownLock.lock()
+        defer { teardownLock.unlock() }
+        guard !isShutdown else { return }
+        isShutdown = true
+        rk_destroy(engine)
+        outputStorage.finish()
     }
 
     // MARK: - Convenience UCI commands
@@ -141,8 +322,8 @@ public final class RecklessEngine: @unchecked Sendable {
     public func newGame() { send("ucinewgame") }
 
     /// Send `quit`, asking the UCI loop to exit.
-    /// Teardown also happens in `deinit`; call this if you want explicit early
-    /// wind-down before the object is released.
+    /// This is a UCI command only; call ``shutdown()`` to synchronously join
+    /// the thread and release its resources.
     public func quit() { send("quit") }
 
     // MARK: - Position + Search helpers

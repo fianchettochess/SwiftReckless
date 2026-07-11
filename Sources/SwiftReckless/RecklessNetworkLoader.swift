@@ -21,16 +21,47 @@ import FoundationNetworking
 #if canImport(CryptoKit)
 import CryptoKit
 #else
-// On non-Apple hosts, use swift-crypto (declared in Package.swift; not yet
-// added — see TODO in Package.swift crypto section).
-// import Crypto
+import Crypto
 #endif
+
+/// Cancellation bridge for URLSession's callback-based download API. The
+/// cancellation handler may run before or after the task is installed, so both
+/// state and the task reference are protected by one lock.
+private final class RecklessDownloadTaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionDownloadTask?
+    private var cancellationRequested = false
+
+    func installAndResume(_ task: URLSessionDownloadTask) {
+        lock.lock()
+        self.task = task
+        let shouldCancel = cancellationRequested
+        lock.unlock()
+
+        task.resume()
+        if shouldCancel { task.cancel() }
+    }
+
+    func cancel() {
+        lock.lock()
+        cancellationRequested = true
+        let task = self.task
+        lock.unlock()
+        task?.cancel()
+    }
+
+    var wasCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancellationRequested
+    }
+}
 
 /// Downloads and verifies the Reckless NNUE network.
 ///
 /// The network filename encodes a SHA-256 prefix in its name (the same scheme
-/// Stockfish uses): `v54-5478683c.nnue`.  The loader verifies the first 8 hex
-/// chars of the SHA-256 of the downloaded file match `5478683c`.
+/// Stockfish uses): `v54-5478683c.nnue`. The loader verifies the complete
+/// pinned SHA-256 digest on every supported platform.
 public struct RecklessNetworkLoader: Sendable {
 
     // ── Current network spec ──────────────────────────────────────────────────
@@ -63,7 +94,7 @@ public struct RecklessNetworkLoader: Sendable {
 
     /// Errors thrown by ``ensure(in:progress:)``.
     public enum LoaderError: Error, Sendable {
-        /// The downloaded file's SHA-256 prefix did not match the filename.
+        /// The downloaded file's complete SHA-256 did not match the manifest.
         case checksumMismatch(String)
         /// The download failed.
         case downloadFailed(String)
@@ -91,9 +122,11 @@ public struct RecklessNetworkLoader: Sendable {
 
     /// Ensure `directory` contains the required NNUE network.
     ///
-    /// If the file is already present and passes SHA-prefix verification,
+    /// If the file is already present and passes full SHA-256 verification,
     /// nothing is downloaded (idempotent).  Otherwise the file is downloaded
     /// to a temp location, verified, and moved atomically into place.
+    /// Cancelling the calling task cancels the active URLSession transfer and
+    /// throws `CancellationError`.
     ///
     /// - Parameters:
     ///   - directory: Directory to store the net (created if absent).
@@ -115,13 +148,15 @@ public struct RecklessNetworkLoader: Sendable {
                 "could not create \(directory.path): \(error.localizedDescription)"
             )
         }
+        try Task.checkCancellation()
 
         let net = Self.network
         let destination = directory.appendingPathComponent(net.filename)
 
         // 2. If already present and valid, skip download.
         if fm.fileExists(atPath: destination.path),
-           (try? verify(fileAt: destination, expectedSHA256: net.sha256)) == true {
+           Self.fileMatchesSHA256(destination, expectedSHA256: net.sha256) {
+            try Task.checkCancellation()
             return destination
         }
 
@@ -131,11 +166,13 @@ public struct RecklessNetworkLoader: Sendable {
         // 3. Download.
         let tempURL = try await downloadToTemp(net, in: directory, progress: progress)
         defer { try? fm.removeItem(at: tempURL) }
+        try Task.checkCancellation()
 
         // 4. Verify.
-        guard (try? verify(fileAt: tempURL, expectedSHA256: net.sha256)) == true else {
+        guard Self.fileMatchesSHA256(tempURL, expectedSHA256: net.sha256) else {
             throw LoaderError.checksumMismatch(net.filename)
         }
+        try Task.checkCancellation()
 
         // 5. Atomic install.
         do {
@@ -160,63 +197,82 @@ public struct RecklessNetworkLoader: Sendable {
             ".\(net.filename).\(UUID().uuidString).part"
         )
 
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
-            let task = session.downloadTask(with: net.downloadURL) { downloadedURL, response, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                guard let downloadedURL else {
-                    cont.resume(throwing: URLError(.badServerResponse))
-                    return
-                }
-                if let http = response as? HTTPURLResponse,
-                   !(200...299).contains(http.statusCode) {
-                    cont.resume(throwing: URLError(.badServerResponse))
-                    return
-                }
+        let taskBox = RecklessDownloadTaskBox()
+        try Task.checkCancellation()
 
-                // Relocate NOW (OS deletes the system temp URL when this handler returns).
-                let fm = FileManager.default
-                try? fm.removeItem(at: tempURL)
-                do {
-                    do {
-                        try fm.moveItem(at: downloadedURL, to: tempURL)
-                    } catch {
-                        try fm.copyItem(at: downloadedURL, to: tempURL)
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
+                let task = session.downloadTask(with: net.downloadURL) { downloadedURL, response, error in
+                    if let error {
+                        if taskBox.wasCancelled {
+                            cont.resume(throwing: CancellationError())
+                        } else {
+                            cont.resume(throwing: LoaderError.downloadFailed(
+                                "\(net.filename): \(error.localizedDescription)"
+                            ))
+                        }
+                        return
                     }
-                } catch {
-                    cont.resume(throwing: LoaderError.fileSystem(
-                        "could not stage download for \(net.filename): \(error.localizedDescription)"
-                    ))
-                    return
-                }
+                    guard let downloadedURL else {
+                        cont.resume(throwing: LoaderError.downloadFailed(
+                            "\(net.filename): response contained no file"
+                        ))
+                        return
+                    }
+                    if let http = response as? HTTPURLResponse,
+                       !(200...299).contains(http.statusCode) {
+                        cont.resume(throwing: LoaderError.downloadFailed(
+                            "\(net.filename): HTTP \(http.statusCode)"
+                        ))
+                        return
+                    }
 
-                if let progress {
-                    let total = (response?.expectedContentLength ?? -1) > 0
-                        ? response!.expectedContentLength
-                        : -1
-                    progress(Progress(bytesDownloaded: max(total, 0), totalBytes: total))
-                }
+                    // Relocate NOW (OS deletes the system temp URL when this handler returns).
+                    let fm = FileManager.default
+                    try? fm.removeItem(at: tempURL)
+                    do {
+                        do {
+                            try fm.moveItem(at: downloadedURL, to: tempURL)
+                        } catch {
+                            try fm.copyItem(at: downloadedURL, to: tempURL)
+                        }
+                    } catch {
+                        cont.resume(throwing: LoaderError.fileSystem(
+                            "could not stage download for \(net.filename): \(error.localizedDescription)"
+                        ))
+                        return
+                    }
 
-                cont.resume(returning: tempURL)
+                    if let progress {
+                        let total = (response?.expectedContentLength ?? -1) > 0
+                            ? response!.expectedContentLength
+                            : -1
+                        progress(Progress(bytesDownloaded: max(total, 0), totalBytes: total))
+                    }
+
+                    cont.resume(returning: tempURL)
+                }
+                taskBox.installAndResume(task)
             }
-            task.resume()
-        }
+        }, onCancel: {
+            taskBox.cancel()
+        })
     }
 
     // MARK: - Verification
 
-    /// Verify a file's SHA-256 matches the given full hex digest.
-    private func verify(fileAt url: URL, expectedSHA256: String) throws -> Bool {
-        guard !expectedSHA256.isEmpty else { return false }
+    /// Verify a file's SHA-256 matches the given complete 64-hex digest.
+    /// Internal so the offline tests can exercise the exact production path.
+    static func fileMatchesSHA256(_ url: URL, expectedSHA256: String) -> Bool {
+        guard expectedSHA256.count == 64,
+              expectedSHA256.allSatisfy({ $0.isHexDigit })
+        else { return false }
 
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             return false
         }
         defer { handle.closeFile() }
 
-#if canImport(CryptoKit)
         var hasher = SHA256()
         while true {
             let chunk = handle.readData(ofLength: 1 << 20)
@@ -225,13 +281,6 @@ public struct RecklessNetworkLoader: Sendable {
         }
         let digest = hasher.finalize()
         let hex = digest.map { String(format: "%02x", $0) }.joined()
-        return hex == expectedSHA256
-#else
-        // On non-Apple platforms (Linux/Android), swift-crypto is not yet
-        // declared as a dependency in Package.swift.  Skip full verification
-        // and trust the download; at minimum the filename prefix match
-        // provides a weak sanity check.
-        return expectedSHA256.hasPrefix(url.deletingPathExtension().lastPathComponent.split(separator: "-").last.map(String.init) ?? "")
-#endif
+        return hex == expectedSHA256.lowercased()
     }
 }

@@ -9,10 +9,12 @@
 //
 // THREADING MODEL (mirrors SwiftStockfish / CStockfish):
 //   * `rk_create` spawns a background thread that runs the Reckless UCI loop.
-//     The loop reads from an internal lock-free queue (fed by `rk_send_command`)
+//     The loop reads from an internal thread-safe queue (fed by `rk_send_command`)
 //     and writes to a callback (set by `rk_set_output_callback`).
 //   * One `RKEngineRef` per process — the Rust engine owns process-global state
-//     (look-up tables, NNUE weights) that cannot safely run in parallel.
+//     (look-up tables, NNUE weights) that cannot safely run in parallel. The
+//     pinned fork's lookup initialization is not restart-safe, so the bridge
+//     currently rejects overlap and any second engine lifetime in one process.
 //   * `rk_destroy` sends "quit", joins the engine thread, and frees all memory.
 //     After it returns no further callbacks can fire.
 //
@@ -42,7 +44,9 @@ typedef void (*RKOutputCallback)(const char *line, const void *context);
 ///                  removed upstream's compile-time embed, so a net path is
 ///                  always required.)
 ///
-/// Returns a non-NULL handle on success, NULL if engine initialisation failed.
+/// Returns a non-NULL handle on success, NULL if engine initialisation failed,
+/// another engine is live, or this process already completed an engine lifetime
+/// under the currently pinned non-restart-safe Reckless fork.
 RKEngineRef rk_create(const char *network_path);
 
 /// Destroy the engine, joining its thread and freeing all resources.

@@ -19,9 +19,9 @@ Reckless v0.9 uses a single NNUE network:
 | Download source | [RecklessNetworks releases](https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/) |
 
 The filename encodes the first 8 hex characters of the SHA-256 (`5478683c`), the
-same convention Stockfish uses. On Apple hosts the loader verifies the **full**
-SHA-256 digest after downloading; on Linux/Android a weak filename-prefix sanity
-check is performed (see [SHA-256 verification](#sha-256-verification-and-cross-platform-crypto)).
+same convention Stockfish uses. The loader verifies the **full** SHA-256 digest
+after downloading on every supported platform (see
+[SHA-256 verification](#sha-256-verification-and-cross-platform-crypto)).
 
 The network spec is declared as a constant:
 
@@ -61,11 +61,11 @@ public struct RecklessNetworkLoader: Sendable {
 `ensure(in:progress:)`:
 
 1. Creates `directory` if it does not exist.
-2. If `v54-5478683c.nnue` is already present and passes SHA-256 verification (full
-   digest on Apple; weak filename-prefix sanity check on Linux/Android), returns
+2. If `v54-5478683c.nnue` is already present and passes complete SHA-256 verification,
+   returns
    immediately — **no download, no network access**.
 3. If missing or invalid: downloads to a temporary location, verifies the SHA-256
-   digest (full digest on Apple; see [cross-platform note](#sha-256-verification-and-cross-platform-crypto)),
+   digest (see [cross-platform note](#sha-256-verification-and-cross-platform-crypto)),
    and atomically moves the file into place.
 4. Returns the `URL` of the verified network file inside `directory`.
 
@@ -101,7 +101,7 @@ try await RecklessNetworkLoader().ensure(in: dir) { p in
 
 ```swift
 public enum RecklessNetworkLoader.LoaderError: Error, Sendable {
-    case checksumMismatch(String)   // downloaded file SHA-256 digest did not match expected (on Apple)
+    case checksumMismatch(String)   // complete downloaded digest did not match expected
     case downloadFailed(String)     // URLSession error
     case fileSystem(String)         // directory creation or atomic move failed
 }
@@ -135,16 +135,11 @@ removed upstream's `include_bytes!` embed specifically to enable this workflow.
 | Platform | Verification |
 |---|---|
 | Apple (macOS · iOS · tvOS · watchOS · visionOS) | **Full SHA-256** via `CryptoKit.SHA256` — the complete 64-hex-char digest is compared against `Network.sha256`. |
-| Linux · Android | **Weak filename-prefix check only.** `swift-crypto` is not yet wired up: `import Crypto` is commented out in source and `Package.swift` declares no crypto dependency. The loader trusts the download and performs a sanity check against the 8-char prefix embedded in the filename. Full cross-platform verification is a TODO. |
+| Linux · Android | **Full SHA-256** via swift-crypto's source-compatible `Crypto.SHA256`. |
 
-The Apple dependency graph is unchanged when building for Apple targets — `CryptoKit`
-is a system framework, no extra package dependency is needed.
-
-!!! warning "Linux/Android: no real SHA-256 verification yet"
-    On non-Apple hosts the downloaded net is accepted as long as its filename
-    contains the expected 8-char prefix (`shaPrefix`). A corrupted or substituted
-    download would not be detected. Wiring `swift-crypto` for full parity with the
-    Apple path is a planned improvement.
+The Apple dependency graph is unchanged when building the normal binary arm —
+`CryptoKit` is a system framework, so swift-crypto is resolved only by the
+non-Apple/source arm.
 
 ## See also
 

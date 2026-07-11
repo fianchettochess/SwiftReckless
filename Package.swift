@@ -71,6 +71,24 @@ let underXcode = Context.environment["__CFBundleIdentifier"] == "com.apple.dt.Xc
 
 let useBinaryEngine = hostIsApple && (underXcode || !forceSource)
 
+// SHA-256 backend for NNUE verification. Apple builds use CryptoKit from the
+// OS. Linux/Android builds need swift-crypto's source-compatible `Crypto`
+// module; keep it out of the normal Apple dependency graph just as
+// SwiftStockfish does.
+let cryptoPackageDependencies: [Package.Dependency]
+let cryptoTargetDependencies: [Target.Dependency]
+if useBinaryEngine {
+    cryptoPackageDependencies = []
+    cryptoTargetDependencies = []
+} else {
+    cryptoPackageDependencies = [
+        .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0"..<"5.0.0"),
+    ]
+    cryptoTargetDependencies = [
+        .product(name: "Crypto", package: "swift-crypto"),
+    ]
+}
+
 // ── Engine targets ────────────────────────────────────────────────────────────
 let engineTargets: [Target]
 if useBinaryEngine {
@@ -188,10 +206,11 @@ let package = Package(
             targets: ["CReckless"]
         ),
     ],
+    dependencies: cryptoPackageDependencies,
     targets: engineTargets + [
         .target(
             name: "SwiftReckless",
-            dependencies: ["CReckless"],
+            dependencies: ["CReckless"] + cryptoTargetDependencies,
             path: "Sources/SwiftReckless"
         ),
         // End-to-end smoke: drives uci → uciok and optionally go depth 1 →

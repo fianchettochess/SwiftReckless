@@ -25,7 +25,7 @@ libc = "0.2"
 # a SIGABRT; exercised by examples/terminal_guard.rs). Kept local to the fork
 # by design (owner decision 2026-07-06 — no upstreaming). Pinned by rev for
 # reproducibility; to pull upstream, rebase the fork branch and bump this rev.
-reckless = { git = "https://github.com/jaredbrewer/Reckless.git", rev = "c864db1", default-features = false }
+reckless = { git = "https://github.com/jaredbrewer/Reckless.git", rev = "420b3d7", default-features = false }
 
 [profile.release]
 # LTO is disabled to ensure the C-exported rk_ffi_* symbols appear in

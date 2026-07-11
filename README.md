@@ -59,7 +59,7 @@ SwiftReckless/
 |---|---|---|
 | Rust crate | `creckless` (`crate-type = ["staticlib", "rlib"]`) | Runs Reckless's UCI loop on a background thread; exposes 4 `extern "C"` symbols |
 | C shim | `CReckless` | `RecklessBridge.c` forwards `rk_*` → `rk_ffi_*`; `RecklessHostStubs.c` supplies no-op `rk_ffi_*` on non-Android hosts (source arm); the public C header is the Swift module |
-| Swift | `SwiftReckless` | `RecklessEngine` + `RecklessNetworkLoader`; `AsyncStream` output; mirrors `StockfishEngine` |
+| Swift | `SwiftReckless` | `RecklessEngine` + `RecklessNetworkLoader`; cancellation-safe `RecklessOutput` plus an `AsyncStream` compatibility adapter |
 
 ---
 
@@ -85,9 +85,16 @@ further callbacks can fire.
 
 I/O is **per-instance**: each engine owns its own channel and callback, with **no
 stdout/fd redirection** (a deliberate change from an earlier stdout-hijack spike).
-Note that the higher-level `RecklessEngine` still enforces **one live engine per
-process**, because the Rust engine owns process-global tables / NNUE weights — the
-same constraint as `StockfishEngine` in SwiftStockfish.
+The Rust FFI enforces **one live engine per process** with a lifecycle gate,
+because the engine owns process-global tables / NNUE weights. It currently also
+allows only **one successful engine lifetime per process**: pinned fork revision
+`c864db1` reruns `lookup::initialize()` on a restart, and its second
+`init_cuckoo()` can loop forever against the already-populated global table. The
+wrapper therefore rejects overlap and later creates with `NULL` instead of
+hanging. Removing this temporary containment requires guarding the fork's
+`lookup::initialize()` (and NNUE threat-table initialization) with
+`std::sync::Once`, bumping the pinned revision, rebuilding the xcframework, and
+then changing the FFI regression to expect a successful second lifetime.
 
 ---
 
@@ -199,8 +206,11 @@ android {
 ```
 
 The Skip/SkipFuse bridge pattern (`/* SKIP @bridge */` + SwiftJNI `callStatic`)
-documented in the Fianchetto memory files applies unchanged — the Swift API
-(`RecklessEngine.send(_:)` / `engine.output`) is identical to `StockfishEngine`.
+documented in the Fianchetto memory files applies unchanged. Generic consumers
+can use the Stockfish-compatible `send(_:)` / `output` surface, but must retain
+one long-lived `output` subscription. Concrete consumers that cancel and restart
+reads on the same process-lifetime engine must use `cancellationSafeOutput`;
+cancelling one of its waiters does not finish output for later searches.
 
 ---
 
@@ -241,7 +251,8 @@ Runtime strategy (same as Stockfish nets in SwiftStockfish):
 - `RecklessNetworkLoader().ensure(in:)` downloads from the
   [RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/)
   release page on first launch (~60 MB).
-- The SHA-256 prefix encoded in the filename (`5478683c`) is verified after download.
+- The complete pinned SHA-256 digest is verified after download on Apple,
+  Linux, and Android (CryptoKit on Apple; swift-crypto elsewhere).
 - On Android the same loader runs (Foundation + URLSession via swift-corelibs-foundation).
 - The downloaded path is passed to `RecklessEngine(networkDirectory:)` →
   `rk_create(network_path)`, which loads it at runtime. When Reckless upgrades its net,
@@ -287,7 +298,8 @@ cd rust && cargo test   # Rust C-ABI regression (tests/ffi_smoke.rs)
 `Tests/SwiftRecklessTests` has two [swift-testing](https://github.com/apple/swift-testing) suites:
 
 1. **`RecklessNetworkLoader offline tests`** — always runs. Asserts the pinned `v54`
-   net spec, the SHA-prefix/filename encoding, and that `RecklessEngine(networkDirectory:)`
+   net spec, complete SHA-256 verification (including a same-prefix/wrong-tail
+   regression), the SHA-prefix/filename encoding, and that `RecklessEngine(networkDirectory:)`
    returns `nil` when the net is absent.
 2. **`RecklessEngine smoke`** — a real `uci → uciok / isready → readyok / go → bestmove`
    handshake against the live engine. It is **guarded on the staged net** at

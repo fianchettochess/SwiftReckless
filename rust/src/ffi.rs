@@ -4,7 +4,7 @@
 //
 // ── Threading model ──────────────────────────────────────────────────────────
 //
-// PER-INSTANCE I/O — MULTI-INSTANCE SAFE
+// PER-INSTANCE I/O — LIFECYCLES SERIALIZED
 // Each engine instance owns an mpsc channel (Sender in EngineState; Receiver
 // passed into reckless::run_io on a dedicated thread).  UCI output is routed
 // through an Arc<Mutex<SharedCallback>> that the engine thread captures in a
@@ -12,6 +12,10 @@
 // never touched.  The app's stdout is free for the lifetime of the engine.
 //
 // rk_ffi_create:
+//   0. Acquire a process-wide lifecycle lease. I/O is per-instance, but the
+//      engine's NNUE weights/tables are global and overlapping searches are not
+//      safe. The pinned fork's lookup initialization is also non-idempotent, so
+//      a second successful engine lifetime is rejected until that fork is fixed.
 //   1. Create an mpsc channel (tx stored in EngineState; rx consumed by the
 //      engine thread).
 //   2. Create Arc<Mutex<SharedCallback>> shared between EngineState and the
@@ -54,8 +58,9 @@
 use libc::{c_char, c_void};
 use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -84,11 +89,75 @@ struct EngineState {
     engine_handle: Option<thread::JoinHandle<()>>,
     /// Shared callback state (also held by the engine thread's output closure).
     shared_cb: Arc<Mutex<SharedCallback>>,
+    /// Held from create until the engine thread is joined and state is freed.
+    /// Reckless's NNUE weights/tables are process-global even though I/O is
+    /// per-instance, so overlapping engines are not safe.
+    _lifecycle_lease: LifecycleLease,
 }
 
 // SAFETY: See SharedCallback above.
 unsafe impl Send for EngineState {}
 unsafe impl Sync for EngineState {}
+
+// ── Process-wide engine lifecycle gate ───────────────────────────────────────
+
+struct LifecycleState {
+    live: bool,
+    /// The pinned Reckless fork's lookup::initialize() is not idempotent:
+    /// its second init_cuckoo() runs against populated tables and can loop
+    /// forever. Until that fork guards lookup + NNUE threat initialization
+    /// with std::sync::Once, one successful run_io lifetime is the safe limit.
+    has_started_once: bool,
+}
+
+struct LifecycleGate {
+    state: Mutex<LifecycleState>,
+}
+
+impl LifecycleGate {
+    fn try_acquire(&'static self) -> Option<LifecycleLease> {
+        let mut state = self.state.lock().unwrap();
+        if state.live || state.has_started_once {
+            return None;
+        }
+        state.live = true;
+        Some(LifecycleLease { gate: self })
+    }
+
+    fn mark_started(&self) {
+        self.state.lock().unwrap().has_started_once = true;
+    }
+
+    fn release(&self) {
+        self.state.lock().unwrap().live = false;
+    }
+}
+
+fn lifecycle_gate() -> &'static LifecycleGate {
+    static GATE: OnceLock<LifecycleGate> = OnceLock::new();
+    GATE.get_or_init(|| LifecycleGate {
+        state: Mutex::new(LifecycleState {
+            live: false,
+            has_started_once: false,
+        }),
+    })
+}
+
+struct LifecycleLease {
+    gate: &'static LifecycleGate,
+}
+
+impl LifecycleLease {
+    fn mark_started(&self) {
+        self.gate.mark_started();
+    }
+}
+
+impl Drop for LifecycleLease {
+    fn drop(&mut self) {
+        self.gate.release();
+    }
+}
 
 // ── FFI functions (rk_ffi_* prefix) ──────────────────────────────────────────
 
@@ -116,6 +185,19 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
             return std::ptr::null_mut();
         }
     };
+    // Reject overlap and a second successful engine lifetime before touching
+    // the process-global tables. The latter is a fail-fast containment for the
+    // pinned fork's non-idempotent lookup initializer; see LifecycleState.
+    let lifecycle_lease = match lifecycle_gate().try_acquire() {
+        Some(lease) => lease,
+        None => {
+            eprintln!(
+                "[creckless] rk_ffi_create: engine lifetime unavailable; \
+                 the pinned Reckless fork currently supports one run per process"
+            );
+            return std::ptr::null_mut();
+        }
+    };
     eprintln!("[creckless] rk_ffi_create: loading NNUE net from {net_path_str}");
     let net_bytes = match std::fs::read(&net_path_str) {
         Ok(b) => b,
@@ -125,7 +207,10 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
         }
     };
     match reckless::nnue::load_network(&net_bytes) {
-        Ok(()) => eprintln!("[creckless] rk_ffi_create: NNUE net loaded ({} bytes)", net_bytes.len()),
+        Ok(()) => eprintln!(
+            "[creckless] rk_ffi_create: NNUE net loaded ({} bytes)",
+            net_bytes.len()
+        ),
         Err(e) => {
             if e.contains("already loaded") {
                 eprintln!("[creckless] rk_ffi_create: NNUE net already loaded, continuing");
@@ -145,6 +230,11 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
         callback_context: std::ptr::null(),
     }));
     let shared_cb_engine = Arc::clone(&shared_cb);
+    // `rk_ffi_create` must not return while run_io is still constructing its
+    // worker pool. An immediate destroy in that window exposed a Reckless
+    // startup/teardown race that could hang the join. A private isready probe
+    // gives us an unambiguous "message loop is live" handshake.
+    let (startup_ready_tx, startup_ready_rx) = std::sync::mpsc::channel::<()>();
 
     // ── 3. Spawn engine thread ────────────────────────────────────────────────
     // reckless::run_io blocks until "quit" or channel close.
@@ -157,6 +247,11 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
                 VecDeque::new(),
                 rx,
                 Box::new(move |line: &str| {
+                    if line == "readyok" {
+                        // The receiver is dropped after create completes. Later
+                        // client isready replies simply make this send fail.
+                        let _ = startup_ready_tx.send(());
+                    }
                     let cb_guard = shared_cb_engine.lock().unwrap();
                     if let Some(cb) = cb_guard.callback {
                         if let Ok(cstr) = CString::new(line) {
@@ -175,11 +270,40 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
         })
         .expect("[creckless] failed to spawn reckless-uci thread");
 
+    // Once run_io has been spawned it may already have entered the pinned
+    // engine's non-idempotent process-global initialization, even if it exits
+    // before answering isready. Consume the one-lifetime slot immediately so
+    // an early startup failure can never make a second unsafe attempt.
+    lifecycle_lease.mark_started();
+
+    if tx.send("isready".to_string()).is_err()
+        || startup_ready_rx
+            .recv_timeout(Duration::from_secs(30))
+            .is_err()
+    {
+        eprintln!("[creckless] rk_ffi_create: engine startup handshake failed");
+        let _ = tx.send("quit".to_string());
+        drop(tx);
+        if engine_handle.is_finished() {
+            let _ = engine_handle.join();
+        } else {
+            // Rust has no safe way to kill a stuck thread. Detach it so the C
+            // caller receives NULL after the bounded timeout, and permanently
+            // consume the process lifecycle slot so no later engine can race
+            // the still-running initializer. Closing tx above lets a merely
+            // slow (not stuck) loop observe EOF and exit eventually.
+            std::mem::forget(lifecycle_lease);
+            drop(engine_handle);
+        }
+        return std::ptr::null_mut();
+    }
+
     // ── 4. Box up state and return ────────────────────────────────────────────
     let state = Box::new(EngineState {
         sender: Mutex::new(Some(tx)),
         engine_handle: Some(engine_handle),
         shared_cb,
+        _lifecycle_lease: lifecycle_lease,
     });
 
     eprintln!("[creckless] rk_ffi_create: engine started (per-instance I/O, no fd redirect)");

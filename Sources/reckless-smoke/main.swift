@@ -107,10 +107,10 @@ err("engine created")
 let buf = LineBuffer()
 let collectSema = DispatchSemaphore(value: 0)
 
-// The output stream is an AsyncStream; we need a Task to iterate it.
+// Keep one cancellation-safe consumer for the engine's full lifetime.
 // Drive the async world from a detached Task inside a RunLoop.
 let collectTask = Task.detached {
-    for await line in engine.output {
+    for await line in engine.cancellationSafeOutput {
         buf.append(line)
         writeErr("[engine] \(line)\n")
     }

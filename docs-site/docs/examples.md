@@ -183,9 +183,10 @@ engine.go(depth: 20)
 ## Tear down
 
 ```swift
-engine.quit()   // sends "quit"; Rust thread joins and all memory is freed
-// Releasing the reference also triggers deinit-based teardown if quit() was not called.
+engine.shutdown() // joins the Rust thread, frees state, and finishes output
+// Releasing the reference also triggers deinit-based teardown if omitted.
 ```
 
-Only **one engine per process** is supported at a time. Fully tear down (release the
-reference after `quit()`) before creating another `RecklessEngine`.
+The currently pinned fork supports only **one engine lifetime per process**.
+After `shutdown()`, create a new process—not another `RecklessEngine`—until the
+fork's global lookup initialization is guarded for restart safety.

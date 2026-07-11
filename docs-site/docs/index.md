@@ -31,7 +31,7 @@ either engine with minimal changes.
 !!! warning "One engine per process"
     The Rust engine owns process-global state (lookup tables, NNUE weights). Only one
     `RecklessEngine` may be alive in a process at a time. Create, use, and fully
-    tear down one engine before making another.
+    the currently pinned fork allows one successful engine lifetime per process.
 
 ## Quick start
 
@@ -58,7 +58,7 @@ Task {
         if line == "readyok" { engine.send("go depth 20") }
         if line.hasPrefix("bestmove ") {
             print("best:", line.split(separator: " ").dropFirst().first ?? "?")
-            engine.quit()
+            engine.shutdown()
             break
         }
     }

@@ -14,15 +14,16 @@ changes.
 public final class RecklessEngine: @unchecked Sendable
 ```
 
-`@unchecked Sendable` because the opaque `RKEngineRef` is treated as immutable after
-`init` and all mutations flow through the Rust mutex inside the FFI crate.
+`@unchecked Sendable` is backed by a Swift teardown lock (which orders sends
+against destroy) plus the Rust mutex/channel implementation.
 
 ## Lifecycle constraints
 
 !!! danger "One live engine per process"
     The Rust engine owns process-global state: lookup tables and the loaded NNUE
     weights. Running two `RecklessEngine` instances concurrently is undefined behaviour.
-    Create, use, and destroy one engine fully before creating another.
+    The pinned fork currently permits one successful engine lifetime per
+    process. A later initializer fails cleanly; see the lifecycle note below.
 
 !!! warning "NNUE net must be present before init"
     `init(networkDirectory:)` returns `nil` if `v54-5478683c.nnue` is not present in
@@ -52,7 +53,7 @@ public var output: AsyncStream<String> { get }
 An async stream of UCI output lines from the engine, delivered in order. Lines are
 stripped of their trailing newline. The stream is unbounded-buffered — iterate
 promptly if you care about back-pressure. The stream finishes when the engine is
-destroyed (`deinit` or `quit()` + release).
+destroyed (`deinit` or explicit `shutdown()`).
 
 ## Raw command interface
 
@@ -99,9 +100,19 @@ Send `ucinewgame` to reset hash tables and engine state for a new game.
 public func quit()
 ```
 
-Send `quit`, asking the UCI loop to exit. The Rust background thread joins and all
-memory is freed. `deinit` also performs a full teardown if `quit()` was not called
-explicitly. After `quit()` the `output` stream finishes.
+Send `quit`, asking the UCI loop to exit. This method sends the UCI command only;
+the wrapper still owns the thread handle and engine state. Use `shutdown()` for
+synchronous, idempotent joining and destruction.
+
+### `shutdown()`
+
+```swift
+public func shutdown()
+```
+
+Send the bridge teardown, join the Rust thread, free its state, and finish
+`output`. Calls after the first are no-ops; a concurrent `send(_:)` is ordered
+safely before or after teardown.
 
 ## Position and search helpers
 
@@ -164,13 +175,16 @@ emits a `bestmove` line.
 
 The Rust FFI crate guarantees:
 
-1. `rk_destroy` (called by `deinit`) sends `"quit"`, drops the command channel,
+1. `rk_destroy` (called by `shutdown()` and `deinit`) sends `"quit"`, drops the command channel,
    and `join()`s the engine thread.
 2. After `rk_destroy` returns, no further output callbacks can fire.
 3. All memory allocated by the Rust engine (NNUE weights, hash tables) is freed.
 
-This means you can safely release a `RecklessEngine` reference and immediately
-allocate another object in the same memory; there is no use-after-free window.
+There is no use-after-free window. However, pinned fork revision `c864db1`
+cannot safely initialize its global cuckoo/NNUE lookup tables twice. The FFI
+therefore rejects any second engine creation in one process. Restart support
+requires `std::sync::Once` guards in the fork, a pin bump, and rebuilt binary
+artifacts.
 
 ## See also
 

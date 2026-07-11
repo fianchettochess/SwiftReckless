@@ -10,9 +10,8 @@ file is missing or unreadable, so always ensure the net is present before creati
 the engine.
 
 `RecklessNetworkLoader.ensure(in:)` is idempotent: a valid, present net is never
-re-downloaded (it verifies the full SHA-256 on Apple, or performs a weak
-filename-prefix sanity check on Linux/Android, and returns immediately). Only a
-missing or invalid file triggers a download.
+re-downloaded (it verifies the complete SHA-256 on Apple, Linux, and Android,
+then returns immediately). Only a missing or invalid file triggers a download.
 
 ```swift
 import SwiftReckless
@@ -53,10 +52,13 @@ guard let engine = RecklessEngine(networkDirectory: netDir) else {
 }
 ```
 
-!!! warning "One engine per process"
-    Only one `RecklessEngine` may be alive in a process at a time. The Rust engine
-    owns process-global state (lookup tables, NNUE weights). Always fully tear down
-    (`engine.quit()` + release the reference) before creating another instance.
+!!! warning "One engine lifetime per process (temporary fork limitation)"
+    The Rust engine owns process-global state. Pinned fork revision `c864db1`
+    also has a non-idempotent lookup initializer, so SwiftReckless currently
+    rejects overlap and any second engine lifetime with a `nil` initializer
+    result rather than risking a hang. A fork revision with `std::sync::Once`
+    around lookup/threat-table initialization plus an xcframework rebuild is
+    required before restart can be enabled safely.
 
 ## 3. Read output and send commands
 
@@ -96,8 +98,8 @@ for await line in engine.output {
 ## 5. Tear down
 
 ```swift
-engine.quit()   // sends "quit"; Rust engine thread joins and all memory is freed
-// Release the engine reference — deinit also tears down if quit() was not called.
+engine.shutdown() // sends "quit", joins the Rust thread, frees state, finishes output
+// deinit also calls shutdown() if explicit teardown was omitted.
 ```
 
 ## Full minimal example
@@ -129,7 +131,7 @@ import SwiftReckless
             }
             if line.hasPrefix("bestmove ") {
                 print(line)
-                engine.quit()
+                engine.shutdown()
                 break
             }
         }
