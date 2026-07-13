@@ -1,5 +1,6 @@
 # Swift / SPM
 .build/
+Package.resolved
 *.o
 *.d
 DerivedData/
