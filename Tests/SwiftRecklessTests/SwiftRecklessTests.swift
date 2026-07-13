@@ -174,6 +174,58 @@ struct RecklessOutputTests {
         #expect(await iterator.next() == "last")
         #expect(await iterator.next() == nil)
     }
+
+    // RecklessEngine.output used to be a computed property that built a fresh
+    // AsyncStream + forwarding Task per access — each access spawned a
+    // competing FIFO consumer that silently stole lines. The cached box must
+    // hold ONE forwarding consumer no matter how often the property is read.
+    // (Tested at the box level: the property itself lives on RecklessEngine,
+    // which cannot be constructed without the gitignored net + Rust engine.)
+    @Test("repeated output access spawns exactly one FIFO consumer and steals no lines")
+    func forwardedOutputIsSingleInstance() async {
+        let storage = RecklessOutputStorage()
+        let forwarded = RecklessForwardedOutput(storage: storage)
+
+        let first = forwarded.stream
+        _ = forwarded.stream   // a second access must NOT add a second consumer
+        _ = forwarded.stream   // nor a third
+
+        // Wait until the forwarding consumer is parked on the FIFO, then give
+        // any would-be extra consumers ample chance to park too.
+        while storage.waitingConsumerCount < 1 { await Task.yield() }
+        for _ in 0..<100 { await Task.yield() }
+        #expect(storage.waitingConsumerCount == 1,
+                "repeated .output access must not spawn competing FIFO consumers")
+
+        // With a single consumer, every line reaches the one stream in order —
+        // nothing is stolen by a discarded stream's forwarder. Bounded by a
+        // timeout race: pre-fix, stolen lines would leave this read suspended
+        // forever (a hang, not a failure), so the timer converts a regression
+        // into a clean red.
+        storage.yield("one")
+        storage.yield("two")
+        let received = await withTaskGroup(of: [String].self) { group in
+            group.addTask {
+                var lines: [String] = []
+                var iterator = first.makeAsyncIterator()
+                while lines.count < 2, let line = await iterator.next() {
+                    lines.append(line)
+                }
+                return lines
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                return []  // timed out — lines were stolen by a competing consumer
+            }
+            let winner = await group.next() ?? []
+            group.cancelAll()
+            return winner
+        }
+        #expect(received == ["one", "two"],
+                "every line must reach the single shared stream, in order")
+
+        storage.finish()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

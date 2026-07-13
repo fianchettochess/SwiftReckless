@@ -137,6 +137,53 @@ final class RecklessOutputStorage: @unchecked Sendable {
     }
 }
 
+/// Lazily creates — and then always returns — the ONE forwarding
+/// `AsyncStream` adapter over an engine's FIFO.
+///
+/// `RecklessEngine.output` used to be a plain computed property that built a
+/// fresh `AsyncStream` plus a forwarding `Task` on every access. Each access
+/// therefore spawned a competing FIFO consumer: two reads of `engine.output`
+/// — natural against the mirrored `StockfishEngine` API, where `output` is a
+/// stored property returning the same stream — silently divided UCI lines
+/// between the streams, and an accessed-then-discarded stream stole whatever
+/// lines it buffered. Caching the stream here restores the Stockfish
+/// semantics: every access observes the same single consumer.
+///
+/// Internal (not private to the engine) so the offline tests can pin the
+/// single-consumer guarantee without a live Rust engine.
+final class RecklessForwardedOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private let storage: RecklessOutputStorage
+    private var cached: AsyncStream<String>?
+
+    init(storage: RecklessOutputStorage) {
+        self.storage = storage
+    }
+
+    /// The single shared adapter stream. First access creates it (spawning
+    /// the one forwarding task); later accesses return the same instance.
+    var stream: AsyncStream<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached { return cached }
+
+        let source = RecklessOutput(storage: storage)
+        let stream = AsyncStream<String>(bufferingPolicy: .unbounded) { continuation in
+            let forwardingTask = Task {
+                for await line in source {
+                    guard case .enqueued = continuation.yield(line) else { break }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in
+                forwardingTask.cancel()
+            }
+        }
+        cached = stream
+        return stream
+    }
+}
+
 /// Ordered, single-consumer output from a ``RecklessEngine``.
 ///
 /// Unlike `AsyncStream`, cancelling an iterator does not finish the underlying
@@ -216,30 +263,24 @@ public final class RecklessEngine: @unchecked Sendable {
         RecklessOutput(storage: outputStorage)
     }
 
+    private let forwardedOutput: RecklessForwardedOutput
+
     /// An async stream of UCI output lines from the engine, in order.
     ///
     /// Lines are delivered without their trailing newline.  The stream is
     /// unbounded-buffered; iterate it promptly if you care about back-pressure.
     /// It finishes when the engine is destroyed (`deinit` / ``shutdown()``).
-    /// Compatibility adapter for the shared `UCIEngine` protocol. The adapter
-    /// has its own sacrificial `AsyncStream`; cancelling it cancels only its
-    /// forwarding waiter in ``cancellationSafeOutput``, not the engine channel.
-    /// Long-lived generic consumers (such as Android's `EngineProbe`) create
-    /// this once. Restarting concrete Reckless consumers should use
-    /// ``cancellationSafeOutput`` directly.
+    /// Compatibility adapter for the shared `UCIEngine` protocol, matching
+    /// `StockfishEngine.output`'s stored-property semantics: every access
+    /// returns the SAME stream (the single forwarding consumer is created on
+    /// first access), so repeated access never spawns a competing FIFO
+    /// consumer. Cancelling it cancels only its forwarding waiter in
+    /// ``cancellationSafeOutput``, not the engine channel — but like any
+    /// `AsyncStream` it is single-consumer and cannot be restarted; restarting
+    /// concrete Reckless consumers should use ``cancellationSafeOutput``
+    /// directly.
     public var output: AsyncStream<String> {
-        let source = cancellationSafeOutput
-        return AsyncStream(bufferingPolicy: .unbounded) { continuation in
-            let forwardingTask = Task {
-                for await line in source {
-                    guard case .enqueued = continuation.yield(line) else { break }
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { @Sendable _ in
-                forwardingTask.cancel()
-            }
-        }
+        forwardedOutput.stream
     }
 
     /// Create and start a Reckless engine instance.
@@ -252,6 +293,10 @@ public final class RecklessEngine: @unchecked Sendable {
     ///   if the Rust FFI layer could not start it, or if this process already
     ///   used its one engine lifetime under the currently pinned fork.
     public init?(networkDirectory: URL) {
+        // One cached adapter per engine (creating the box spawns no task;
+        // the forwarding consumer starts on `output`'s first access).
+        self.forwardedOutput = RecklessForwardedOutput(storage: outputStorage)
+
         // Build the full path to the net file and verify it exists before
         // handing it to the Rust FFI (which returns NULL on failure, but
         // an explicit pre-check gives a clearer early-out).
