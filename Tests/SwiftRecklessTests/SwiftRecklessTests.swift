@@ -248,6 +248,19 @@ struct RecklessEngineSmokeTests {
         return FileManager.default.fileExists(atPath: net.path) ? dir : nil
     }
 
+    /// True on the forced-source macOS arm, which intentionally links host
+    /// no-op stubs (only Android links the source-built Rust archive). A
+    /// developer may still have the ignored net staged locally, which must
+    /// not turn this host-introspection configuration into a false
+    /// integration failure.
+    private static var isForcedSourceStubBuild: Bool {
+        #if os(macOS)
+        return ProcessInfo.processInfo.environment["SWIFTRECKLESS_FORCE_SOURCE_BUILD"] == "1"
+        #else
+        return false
+        #endif
+    }
+
     /// Race the output stream against a timeout; true if a matching line arrives.
     private func awaitLine(_ engine: RecklessEngine, timeout: Duration,
                            where pred: @escaping @Sendable (String) -> Bool) async -> Bool {
@@ -263,21 +276,22 @@ struct RecklessEngineSmokeTests {
         }
     }
 
-    @Test("uci → uciok, isready → readyok, go → bestmove, end-to-end")
+    // A RECORDED skip, never a silent pass: this is the package's only
+    // real-engine test, and its old body early-returned green both when the
+    // gitignored net wasn't staged (every CI/fresh checkout) and on the
+    // forced-source macOS arm — a suite run could show 100% pass with zero
+    // engine code executed. `.enabled(if:)` (the mechanism the sibling
+    // SwiftStockfish suite uses) makes the not-run state visible as a skip.
+    @Test(
+        "uci → uciok, isready → readyok, go → bestmove, end-to-end",
+        .enabled(
+            if: RecklessEngineSmokeTests.stagedNetDir != nil
+                && !RecklessEngineSmokeTests.isForcedSourceStubBuild,
+            "needs the gitignored dev net staged in rust/networks and a real (non-stub) engine link"
+        )
+    )
     func fullHandshake() async throws {
-        #if os(macOS)
-        // The forced-source macOS arm intentionally links host no-op stubs;
-        // only Android links the source-built Rust archive. A developer may
-        // still have the ignored net staged locally, which must not turn this
-        // host-introspection configuration into a false integration failure.
-        if ProcessInfo.processInfo.environment["SWIFTRECKLESS_FORCE_SOURCE_BUILD"] == "1" {
-            return
-        }
-        #endif
-        guard let netDir = Self.stagedNetDir else {
-            // Net is gitignored; a fresh checkout / CI without it skips (passes).
-            return
-        }
+        let netDir = try #require(Self.stagedNetDir)
         guard let engine = RecklessEngine(networkDirectory: netDir) else {
             Issue.record("RecklessEngine(networkDirectory:) returned nil — net present but engine failed to start")
             return
