@@ -52,12 +52,13 @@ a consuming target links individually.
 |---|---|
 | Upstream | https://github.com/codedeliveryservice/Reckless |
 | License | AGPL-3.0 |
-| Fork used | `github.com/jaredbrewer/Reckless.git`, pinned `rev = "bd10570"` |
+| Fork used | `github.com/jaredbrewer/Reckless.git`, pinned `rev = "420b3d7"` |
 | Fork branch | `swiftreckless` on upstream tag `v0.9.0` |
 
-The fork makes two patches: adds a `[lib]` target (upstream Reckless is binary-only)
-and replaces the compile-time NNUE embed with runtime loading. Both patches are
-minimal and designed to be upstreamable.
+The fork makes four focused patches: it adds a `[lib]` target (upstream Reckless is
+binary-only), replaces the compile-time NNUE embed with runtime loading, makes UCI
+I/O instance-local, and guards terminal positions with no legal root move. These
+changes are required by the wrapper's library and multi-instance execution model.
 
 ## SwiftReckless license file
 

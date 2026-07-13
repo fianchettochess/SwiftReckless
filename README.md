@@ -219,7 +219,7 @@ cancelling one of its waiters does not finish output for later searches.
 | Property | Value |
 |---|---|
 | Upstream repo | https://github.com/codedeliveryservice/Reckless |
-| Dependency actually used | Maintained fork **`github.com/jaredbrewer/Reckless.git`**, pinned `rev = "bd10570"`, `default-features = false` (branch `swiftreckless` on upstream tag `v0.9.0`; two patches: a `[lib]` target + runtime NNUE loading) |
+| Dependency actually used | Maintained fork **`github.com/jaredbrewer/Reckless.git`**, pinned `rev = "420b3d7"`, `default-features = false` (branch `swiftreckless` on upstream tag `v0.9.0`; four patches: a `[lib]` target, runtime NNUE loading, per-instance I/O, and terminal-position guarding) |
 | Language | Rust |
 | License | **AGPL-3.0** |
 | Protocol | UCI (`run_io` implements the message loop) |

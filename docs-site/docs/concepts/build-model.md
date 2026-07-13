@@ -130,7 +130,7 @@ links cleanly without an Android NDK.
 ## The Reckless fork
 
 The Rust dependency is `github.com/jaredbrewer/Reckless.git`, pinned to
-`rev = "bd10570"` (`default-features = false`). The fork makes two patches to the
+`rev = "420b3d7"` (`default-features = false`). The fork makes four patches to the
 upstream `codedeliveryservice/Reckless` at tag `v0.9.0`:
 
 1. Adds a `[lib]` target (upstream Reckless is binary-only; it has no library target
@@ -138,6 +138,10 @@ upstream `codedeliveryservice/Reckless` at tag `v0.9.0`:
 2. Replaces the compile-time `include_bytes!` NNUE embed with runtime loading
    (the path is passed to `rk_ffi_create`), enabling runtime net provisioning and
    net upgrades without a Rust rebuild.
+3. Adds per-instance I/O so concurrent engine instances do not share a process-wide
+   UCI input/output channel.
+4. Guards terminal positions with no legal root move and emits `bestmove (none)`
+   instead of aborting.
 
 With `default-features = false`, the effective transitive dependency is just `libc`.
 
