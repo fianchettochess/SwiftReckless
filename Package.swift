@@ -98,12 +98,8 @@ if useBinaryEngine {
     engineTargets = [
         .binaryTarget(
             name: "RecklessFFI",
-            // Built on-demand by Tools/build-xcframework.sh; GITIGNORED, never
-            // committed. The xcframework carries the full Apple gamut (10
-            // slices): iOS, iOS-sim, macOS, Mac Catalyst, tvOS (+sim), watchOS
-            // (+sim), visionOS (+sim). tvOS/watchOS/visionOS are Rust Tier-3,
-            // built with a nightly toolchain + `-Z build-std`.
-            path: "Frameworks/RecklessFFI.xcframework"
+            url: "https://github.com/jaredbrewer/SwiftReckless/releases/download/0.9.4/RecklessFFI.xcframework.zip",
+            checksum: "3593c1294a02b5deb4967901588c3b6e29c71051b9debcb696c85666e087114d"
         ),
         .target(
             name: "CReckless",

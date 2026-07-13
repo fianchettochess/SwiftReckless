@@ -34,3 +34,5 @@ networks/
 # (No NNUE net is baked in; the net is loaded at runtime from rust/networks/.)
 # The xcframework is NOT committed; run the script after each Reckless update.
 Frameworks/RecklessFFI.xcframework/
+Frameworks/*.xcframework
+RecklessFFI.xcframework.zip
