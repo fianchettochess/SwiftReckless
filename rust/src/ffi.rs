@@ -58,6 +58,8 @@
 use libc::{c_char, c_void};
 use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
+use std::io;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
@@ -159,6 +161,92 @@ impl Drop for LifecycleLease {
     }
 }
 
+// ── Failure containment and command validation ──────────────────────────────
+
+const MAX_HASH_MIB: usize = 262_144;
+const MIN_THREAD_OPTION: usize = 1;
+const MIN_RECKLESS_THREAD_LIMIT: usize = 512;
+const MAX_MOVE_OVERHEAD_MS: u64 = 2_000;
+const MAX_MULTI_PV: usize = 256;
+
+/// Mirrors the pinned engine's advertised `Threads` maximum without reaching
+/// into its private `threadpool` module.
+fn maximum_reckless_threads() -> usize {
+    thread::available_parallelism()
+        .map(|count| count.get().saturating_mul(4).max(MIN_RECKLESS_THREAD_LIMIT))
+        .unwrap_or(MIN_RECKLESS_THREAD_LIMIT)
+}
+
+fn parses_inclusive<T>(value: &str, minimum: T, maximum: T) -> bool
+where
+    T: std::str::FromStr + PartialOrd,
+{
+    value
+        .parse::<T>()
+        .map(|parsed| parsed >= minimum && parsed <= maximum)
+        .unwrap_or(false)
+}
+
+/// The pinned Reckless parser still uses `parse().unwrap()` for these exact
+/// command shapes. `rk_ffi_send_command` is a public raw-string boundary, so a
+/// malformed value must be rejected before it can reach a release engine.
+/// Other `setoption` shapes fall through to the engine's non-panicking
+/// "unknown option" handling. Unexpected engine defects are separately
+/// contained at the engine-thread boundary below.
+fn command_avoids_known_parser_abort(command: &str) -> bool {
+    let tokens = command.split_whitespace().collect::<Vec<_>>();
+    match tokens.as_slice() {
+        ["setoption", "name", "Hash", "value", value] => {
+            parses_inclusive(value, 1usize, MAX_HASH_MIB)
+        }
+        ["setoption", "name", "Threads", "value", value] => {
+            parses_inclusive(value, MIN_THREAD_OPTION, maximum_reckless_threads())
+        }
+        ["setoption", "name", "MoveOverhead", "value", value] => {
+            parses_inclusive(value, 0u64, MAX_MOVE_OVERHEAD_MS)
+        }
+        ["setoption", "name", "MultiPV", "value", value] => {
+            parses_inclusive(value, 1usize, MAX_MULTI_PV)
+        }
+        ["setoption", "name", "UCI_Chess960" | "Minimal", "value", value] => {
+            matches!(*value, "true" | "false")
+        }
+        // The engine's perft implementation subtracts one from depth before
+        // recurring. Reject zero as well as values that fail usize parsing.
+        ["perft", depth] => parses_inclusive(depth, 1usize, usize::MAX),
+        _ => true,
+    }
+}
+
+fn spawn_engine_thread_with<F, S>(thread_main: F, spawn: S) -> io::Result<thread::JoinHandle<()>>
+where
+    F: FnOnce() + Send + 'static,
+    S: FnOnce(thread::Builder, F) -> io::Result<thread::JoinHandle<()>>,
+{
+    let builder = thread::Builder::new()
+        .name("reckless-uci".into())
+        .stack_size(8 * 1024 * 1024); // 8 MB — search is stack-heavy
+    spawn(builder, thread_main)
+}
+
+fn spawn_engine_thread<F>(thread_main: F) -> io::Result<thread::JoinHandle<()>>
+where
+    F: FnOnce() + Send + 'static,
+{
+    spawn_engine_thread_with(thread_main, |builder, main| builder.spawn(main))
+}
+
+/// Contain panics raised by the pinned engine (including worker-thread
+/// creation failures propagated by its joins) inside the Rust engine thread.
+/// The release profile must remain `panic = "unwind"` for this boundary to be
+/// effective.
+fn run_engine_contained<F>(engine_main: F) -> bool
+where
+    F: FnOnce(),
+{
+    catch_unwind(AssertUnwindSafe(engine_main)).is_ok()
+}
+
 // ── FFI functions (rk_ffi_* prefix) ──────────────────────────────────────────
 
 /// Create and start a Reckless engine instance.
@@ -239,10 +327,8 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
     // ── 3. Spawn engine thread ────────────────────────────────────────────────
     // reckless::run_io blocks until "quit" or channel close.
     // The output closure captures shared_cb_engine and fires for every UCI line.
-    let engine_handle = thread::Builder::new()
-        .name("reckless-uci".into())
-        .stack_size(8 * 1024 * 1024) // 8 MB — search is stack-heavy
-        .spawn(move || {
+    let engine_handle = match spawn_engine_thread(move || {
+        let completed_without_panic = run_engine_contained(|| {
             reckless::run_io(
                 VecDeque::new(),
                 rx,
@@ -267,8 +353,21 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
                     // else: no callback installed yet; drop the line silently.
                 }),
             );
-        })
-        .expect("[creckless] failed to spawn reckless-uci thread");
+        });
+        // run_io normally clears this itself, but an unwind skips its trailing
+        // cleanup. Clear the process-global sink before the Swift callback
+        // context can be released by shutdown.
+        reckless::set_output_sink(None);
+        if !completed_without_panic {
+            eprintln!("[creckless] reckless engine panicked; terminating this engine instance");
+        }
+    }) {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!("[creckless] rk_ffi_create: failed to spawn engine thread: {error}");
+            return std::ptr::null_mut();
+        }
+    };
 
     // Once run_io has been spawned it may already have entered the pinned
     // engine's non-idempotent process-global initialization, even if it exits
@@ -392,10 +491,98 @@ pub unsafe extern "C" fn rk_ffi_send_command(engine: *mut c_void, command: *cons
         Ok(s) => s.to_owned(),
         Err(_) => return,
     };
+    if !command_avoids_known_parser_abort(&cmd_str) {
+        eprintln!("[creckless] rejected malformed or out-of-range UCI command");
+        return;
+    }
 
     let guard = state.sender.lock().unwrap();
     if let Some(tx) = &*guard {
         let _ = tx.send(cmd_str);
     }
     // If sender is None (destroy in progress), silently discard.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn rejects_values_that_can_panic_the_pinned_uci_parser() {
+        assert!(command_avoids_known_parser_abort(
+            "setoption name Hash value 1"
+        ));
+        assert!(command_avoids_known_parser_abort(
+            "setoption name Hash value 262144"
+        ));
+        assert!(!command_avoids_known_parser_abort(
+            "setoption name Hash value nope"
+        ));
+        assert!(!command_avoids_known_parser_abort(
+            "setoption name Hash value 0"
+        ));
+        assert!(!command_avoids_known_parser_abort(
+            "setoption name Hash value 262145"
+        ));
+
+        assert!(command_avoids_known_parser_abort(
+            "setoption name Threads value 1"
+        ));
+        assert!(!command_avoids_known_parser_abort(
+            "setoption name Threads value nope"
+        ));
+        assert!(!command_avoids_known_parser_abort(
+            "setoption name Threads value 0"
+        ));
+
+        assert!(command_avoids_known_parser_abort(
+            "setoption name MoveOverhead value 0"
+        ));
+        assert!(command_avoids_known_parser_abort(
+            "setoption name MoveOverhead value 2000"
+        ));
+        assert!(!command_avoids_known_parser_abort(
+            "setoption name MoveOverhead value -1"
+        ));
+        assert!(!command_avoids_known_parser_abort(
+            "setoption name MoveOverhead value 2001"
+        ));
+
+        assert!(command_avoids_known_parser_abort(
+            "setoption name MultiPV value 1"
+        ));
+        assert!(command_avoids_known_parser_abort(
+            "setoption name MultiPV value 256"
+        ));
+        assert!(!command_avoids_known_parser_abort(
+            "setoption name MultiPV value 0"
+        ));
+        assert!(!command_avoids_known_parser_abort(
+            "setoption name MultiPV value 257"
+        ));
+
+        assert!(command_avoids_known_parser_abort("perft 1"));
+        assert!(!command_avoids_known_parser_abort("perft 0"));
+        assert!(!command_avoids_known_parser_abort("perft nope"));
+        assert!(command_avoids_known_parser_abort("position startpos"));
+    }
+
+    #[test]
+    fn thread_spawn_failure_is_returned_without_running_engine_main() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_on_thread = Arc::clone(&ran);
+        let result = spawn_engine_thread_with(
+            move || ran_on_thread.store(true, Ordering::SeqCst),
+            |_builder, _main| Err(io::Error::from(io::ErrorKind::WouldBlock)),
+        );
+
+        assert!(result.is_err());
+        assert!(!ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn engine_panics_are_contained_on_the_rust_thread() {
+        assert!(!run_engine_contained(|| panic!("synthetic engine panic")));
+    }
 }

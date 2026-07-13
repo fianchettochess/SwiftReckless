@@ -79,7 +79,7 @@ for t in "${STABLE_TARGETS[@]}"; do "$RUSTUP" target add "$t" >/dev/null 2>&1 ||
 
 cargo_stable() { RUSTFLAGS="$2" "$CARGO" build --release --manifest-path "$MANIFEST" --target "$1"; }
 cargo_std()    { RUSTFLAGS="$2" "$RUSTUP" run nightly cargo build --release \
-                   -Z build-std=std,panic_abort --manifest-path "$MANIFEST" --target "$1"; }
+                   -Z build-std=std,panic_unwind --manifest-path "$MANIFEST" --target "$1"; }
 LIB() { printf '%s' "$RUST_DIR/target/$1/release/libcreckless.a"; }
 flags_for() { case "$1" in x86_64-*) printf '%s' "$X86";; *) printf '%s' "$NEON";; esac; }
 

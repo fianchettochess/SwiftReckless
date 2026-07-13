@@ -35,6 +35,10 @@ reckless = { git = "https://github.com/jaredbrewer/Reckless.git", rev = "420b3d7
 # from a staticlib's __.SYMDEF table.  LTO can be re-enabled for the xcframework
 # (P3) build once we verify the xcframework build script handles it correctly.
 lto = false
-panic = "abort"
+# The engine runs behind an in-process C ABI. Keep panics unwindable so the
+# dedicated Rust thread can contain an unexpected engine panic instead of
+# aborting the Swift/Android host process. ffi.rs catches every unwind before
+# it can approach an extern "C" boundary.
+panic = "unwind"
 codegen-units = 1
 opt-level = 3
