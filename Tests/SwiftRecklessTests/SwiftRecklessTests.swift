@@ -1,5 +1,10 @@
 import Testing
 import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 @testable import SwiftReckless
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -34,6 +39,69 @@ struct NetworkLoaderTests {
             .appendingPathComponent("reckless-empty-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
         #expect(RecklessEngine(networkDirectory: empty) == nil)
+    }
+
+    // ensure() stages downloads at a hidden `.<net>.<UUID>.part` in the net
+    // directory; in-process cleanup is only the `defer` in ensure(), so a
+    // crash/kill during the verify/install window (hashing the ~20-45 MB net)
+    // orphans the file forever unless a pruning sweep reclaims it. The sweep
+    // mirrors SwiftStockfish's pruneStaleNetworks (see the intentional-mirror
+    // note in both loaders). Hermetic: the injected synthetic net is
+    // present+valid (its full SHA-256 matches the fixture bytes), so ensure()
+    // never reaches its download path.
+    @Test("ensure prunes orphaned .part staging files and stale nets, keeps the valid net and bystanders")
+    func prunesOrphanedStagingAndStaleNets() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reckless-prune-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fm = FileManager.default
+
+        // A synthetic net whose pinned SHA-256 really matches the fixture.
+        let content = Data("swiftreckless-synthetic-net".utf8)
+        let sha = SHA256.hash(data: content).map { String(format: "%02x", $0) }.joined()
+        let net = RecklessNetworkLoader.Network(
+            filename: "v54-\(String(sha.prefix(8))).nnue",
+            sha256: sha,
+            downloadURL: URL(string: "https://invalid.example/never-fetched")!
+        )
+        let validURL = dir.appendingPathComponent(net.filename)
+        try content.write(to: validURL)
+
+        // Orphaned staging files, named exactly as ensure() stages them —
+        // one for the current net, one from a previous version's crashed run.
+        let orphanCurrent = dir.appendingPathComponent(
+            ".\(net.filename).\(UUID().uuidString).part"
+        )
+        let orphanOld = dir.appendingPathComponent(
+            ".v53-deadbeef.nnue.\(UUID().uuidString).part"
+        )
+        try Data("half-downloaded".utf8).write(to: orphanCurrent)
+        try Data("half-downloaded".utf8).write(to: orphanOld)
+
+        // A stale net from a previous Reckless version, and bystanders the
+        // sweep must never touch.
+        let staleNet = dir.appendingPathComponent("v53-deadbeef.nnue")
+        let hiddenBystander = dir.appendingPathComponent(".unrelated-hidden")
+        let notes = dir.appendingPathComponent("notes.txt")
+        try Data("stale".utf8).write(to: staleNet)
+        try Data("keep me".utf8).write(to: hiddenBystander)
+        try Data("keep me too".utf8).write(to: notes)
+
+        let installed = try await RecklessNetworkLoader(network: net).ensure(in: dir)
+
+        #expect(installed == validURL)
+        #expect(fm.fileExists(atPath: validURL.path), "the valid net must be kept")
+        #expect(!fm.fileExists(atPath: orphanCurrent.path),
+                "orphaned .part staging file for the current net must be pruned")
+        #expect(!fm.fileExists(atPath: orphanOld.path),
+                "orphaned .part staging file from a previous version must be pruned")
+        #expect(!fm.fileExists(atPath: staleNet.path),
+                "a stale previous-version net must be pruned")
+        #expect(fm.fileExists(atPath: hiddenBystander.path),
+                "unrelated hidden files must be untouched")
+        #expect(fm.fileExists(atPath: notes.path), "non-net files must be untouched")
+        #expect(try Data(contentsOf: validURL) == content, "the kept net's bytes are undisturbed")
     }
 
     @Test("Verification compares the complete SHA-256, not only the filename prefix")

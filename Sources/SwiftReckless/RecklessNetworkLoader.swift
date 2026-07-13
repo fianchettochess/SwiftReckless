@@ -6,6 +6,18 @@
 //  The net is NEVER committed to this repo (same policy as the Stockfish nets
 //  in SwiftStockfish / Fianchetto).
 //
+//  INTENTIONAL MIRROR of SwiftStockfish's StockfishNetworkLoader.swift: the
+//  two packages must stay dependency-free of each other, so the download box,
+//  the downloadToTemp staging pipeline, and the pruning sweep are maintained
+//  as deliberate twins. CHANGE THEM TOGETHER — a hardening fix landed in one
+//  loader must be ported to the other in the same session (this rule exists
+//  because the two copies drifted once already). Intentional differences:
+//  Stockfish manages a manifest of several `nn-<12hex>.nnue` nets verified by
+//  SHA-256 *prefix* with a fishtest→GitHub source fallback; Reckless manages
+//  one `v<NN>-<8hex>.nnue` net verified against a pinned *full* SHA-256 from
+//  a single URL, so its LoaderError carries download context Stockfish
+//  expresses via allSourcesFailed.
+//
 //  USAGE:
 //    let support = FileManager.default.urls(for: .applicationSupportDirectory,
 //                                           in: .userDomainMask)[0]
@@ -24,9 +36,10 @@ import CryptoKit
 import Crypto
 #endif
 
-/// Cancellation bridge for URLSession's callback-based download API. The
-/// cancellation handler may run before or after the task is installed, so both
-/// state and the task reference are protected by one lock.
+/// Cancellation bridge for the callback-based URLSession API. Parent-task
+/// cancellation can race task creation, so the state and task reference share
+/// one lock. Deliberate twin of SwiftStockfish's StockfishDownloadTaskBox —
+/// change them together (see the mirror note in the file header).
 private final class RecklessDownloadTaskBox: @unchecked Sendable {
     private let lock = NSLock()
     private var task: URLSessionDownloadTask?
@@ -114,14 +127,30 @@ public struct RecklessNetworkLoader: Sendable {
         }
     }
 
+    /// The net this instance ensures. Always ``network`` in production; the
+    /// internal seam below substitutes a synthetic net for offline tests.
+    private let requiredNetwork: Network
+
     private let session: URLSession
 
     public init() {
+        self.init(network: Self.network)
+    }
+
+    /// Testability seam mirroring StockfishNetworkLoader's injectable
+    /// manifest: offline tests substitute a synthetic net whose pinned full
+    /// SHA-256 matches a fixture already on disk, so `ensure` completes its
+    /// prune/verify work without ever reaching the download path.
+    init(network: Network) {
+        self.requiredNetwork = network
         self.session = URLSession(configuration: .ephemeral)
     }
 
     /// Ensure `directory` contains the required NNUE network.
     ///
+    /// First PRUNES the directory: stale `v…-….nnue` nets from a previous
+    /// Reckless version and orphaned `.….nnue.<UUID>.part` download staging
+    /// files left by a crashed/killed earlier run are deleted.
     /// If the file is already present and passes full SHA-256 verification,
     /// nothing is downloaded (idempotent).  Otherwise the file is downloaded
     /// to a temp location, verified, and moved atomically into place.
@@ -150,7 +179,12 @@ public struct RecklessNetworkLoader: Sendable {
         }
         try Task.checkCancellation()
 
-        let net = Self.network
+        let net = requiredNetwork
+
+        // 1b. Prune stale nets and orphaned download staging files.
+        try pruneStaleFiles(in: directory, keeping: net.filename, fm: fm)
+        try Task.checkCancellation()
+
         let destination = directory.appendingPathComponent(net.filename)
 
         // 2. If already present and valid, skip download.
@@ -184,6 +218,57 @@ public struct RecklessNetworkLoader: Sendable {
         }
 
         return destination
+    }
+
+    // MARK: - Pruning
+
+    /// Deliberate twin of StockfishNetworkLoader.pruneStaleNetworks — change
+    /// them together (see the mirror note in the file header).
+    private func pruneStaleFiles(
+        in directory: URL,
+        keeping requiredName: String,
+        fm: FileManager
+    ) throws {
+        let contents: [URL]
+        do {
+            // No `.skipsHiddenFiles`: the download staging files this pruner
+            // must reclaim are dot-prefixed (hidden) by design — see below.
+            contents = try fm.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            )
+        } catch {
+            // A directory we just created should be enumerable; treat a failure
+            // here as fatal so we don't silently skip pruning.
+            throw LoaderError.fileSystem("could not enumerate \(directory.path): \(error.localizedDescription)")
+        }
+
+        for url in contents {
+            let name = url.lastPathComponent
+
+            // Orphaned download staging files: downloadToTemp stages in-flight
+            // bytes at `.v<NN>-<hex>.nnue.<UUID>.part`; in-process cleanup is a
+            // `defer` in ensure(), so a crash/kill during the verify/install
+            // window (which includes SHA-256 hashing the ~20-45 MB net)
+            // orphans the file forever. Any `.part` present NOW is from a dead
+            // run: live staging files exist only during a download, and
+            // downloads start strictly after this prune within the same
+            // `ensure` call (concurrent `ensure` calls on one directory are
+            // not supported). The three-piece match is exact to the staging
+            // scheme so no unrelated hidden file is ever touched.
+            if name.hasPrefix(".v"), name.contains(".nnue."), name.hasSuffix(".part") {
+                try? fm.removeItem(at: url)
+                continue
+            }
+
+            // Stale nets from a previous Reckless version (`v53-….nnue` after
+            // an upgrade to v54): prune by Reckless's `v…-….nnue` name shape,
+            // leaving every non-net file untouched.
+            guard name.hasPrefix("v"), name.contains("-"), name.hasSuffix(".nnue") else { continue }
+            if name != requiredName {
+                try? fm.removeItem(at: url)
+            }
+        }
     }
 
     // MARK: - Download
