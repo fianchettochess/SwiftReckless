@@ -34,9 +34,10 @@
 //     once to produce `Frameworks/RecklessFFI.xcframework`, then `swift build`.
 //   * Android: source arm via `cargo-ndk` + RECKLESS_LIB_DIR (see README).
 //
-// The `binaryTarget` points to `Frameworks/RecklessFFI.xcframework`, which is
-// built on-demand and GITIGNORED (never committed, ~90 MB) — a fresh clone must
-// build it once. At release time CI rewrites the binaryTarget to url+checksum.
+// The `binaryTarget` points to `Frameworks/RecklessFFI.xcframework`, which IS
+// committed (~148 MB, 10 slices, plain git — matches SwiftStockfish) so a fresh
+// clone / CI resolves without a Rust rebuild. Rebuild with
+// Tools/build-xcframework.sh after a Reckless engine update and commit it.
 
 import PackageDescription
 
