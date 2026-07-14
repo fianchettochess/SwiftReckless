@@ -28,7 +28,7 @@
 //
 // BUILD STATUS (wired & working — see README "Status" section):
 //   * The Rust crate at `rust/` depends on the maintained Reckless fork
-//     (github.com/jaredbrewer/Reckless, pinned rev) and drives it in-process;
+//     (github.com/fianchettochess/Reckless, pinned rev) and drives it in-process;
 //     ffi.rs has real bodies. The NNUE net is loaded at runtime (never baked).
 //   * Apple (binary arm): run `Tools/build-macos.sh` (or build-xcframework.sh)
 //     once to produce `Frameworks/RecklessFFI.xcframework`, then `swift build`.

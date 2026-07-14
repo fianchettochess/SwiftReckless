@@ -129,7 +129,7 @@ links cleanly without an Android NDK.
 
 ## The Reckless fork
 
-The Rust dependency is `github.com/jaredbrewer/Reckless.git`, pinned to
+The Rust dependency is `github.com/fianchettochess/Reckless.git`, pinned to
 `rev = "420b3d7"` (`default-features = false`). The fork makes four patches to the
 upstream `codedeliveryservice/Reckless` at tag `v0.9.0`:
 

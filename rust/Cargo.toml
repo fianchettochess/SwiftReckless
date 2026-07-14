@@ -18,14 +18,14 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 # libc is needed for c_char, c_void types in the FFI surface.
 libc = "0.2"
-# Our maintained fork of Reckless (github.com/jaredbrewer/Reckless, branch
+# Our maintained fork of Reckless (github.com/fianchettochess/Reckless, branch
 # `swiftreckless` on tag v0.9.0): four patches on top of upstream — a [lib]
 # target, runtime NNUE loading, per-instance I/O (run_io + uci_out! sink), and
 # the terminal-position guard (empty root_moves → "bestmove (none)" instead of
 # a SIGABRT; exercised by examples/terminal_guard.rs). Kept local to the fork
 # by design (owner decision 2026-07-06 — no upstreaming). Pinned by rev for
 # reproducibility; to pull upstream, rebase the fork branch and bump this rev.
-reckless = { git = "https://github.com/jaredbrewer/Reckless.git", rev = "420b3d7", default-features = false }
+reckless = { git = "https://github.com/fianchettochess/Reckless.git", rev = "420b3d7", default-features = false }
 
 [profile.release]
 # LTO is disabled to ensure the C-exported rk_ffi_* symbols appear in
