@@ -3,7 +3,7 @@
 A Swift Package Manager wrapper around the [Reckless](https://github.com/codedeliveryservice/Reckless)
 chess engine — a competitive UCI engine written in Rust (AGPL-3.0).
 
-Structured as a sibling to [SwiftStockfish](https://github.com/jaredbrewer/SwiftStockfish)
+Structured as a sibling to [SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish)
 and designed so the existing `UCIInfoParser` / `EngineProbe` layer in Fianchetto can
 be adapted to either engine with minimal changes.
 
