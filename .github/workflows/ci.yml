@@ -1,20 +1,29 @@
 name: CI
 
-# Per-push build + test of the SOURCE arm (host stubs) on Linux and macOS.
+# Build + test the SOURCE arm (host stubs) on Linux and macOS.
 #
-# The BINARY arm (the real Rust engine via RecklessFFI.xcframework) is heavy to
-# build — 10 Apple slices, including nightly `-Z build-std` for tvOS/watchOS/
-# visionOS — so it is validated by the Release workflow, which builds + publishes
-# the xcframework. This CI guards the always-cheap source arm instead.
+# SOURCE ARM rationale: the Rust xcframework (RecklessFFI.xcframework) is
+# gitignored and not committed — a fresh checkout won't have it.  The source
+# arm (non-Apple host, or SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 on macOS)
+# compiles the thin C bridge + RecklessHostStubs.c (no-op rk_ffi_* symbols)
+# so the package builds and tests without the Rust engine binary.  The NNUE
+# net is also gitignored, so the net-guarded engine smoke test correctly
+# skips-and-passes.
 #
-# Source arm: on non-Apple hosts (and under SWIFTRECKLESS_FORCE_SOURCE_BUILD=1),
-# Package.swift compiles the C bridge + RecklessHostStubs.c (no-op rk_ffi_*), so
-# the package builds without the Rust engine binary. The NNUE net is gitignored,
-# so the net-guarded engine smoke test skips-and-passes here.
+# The BINARY arm (the real Rust engine via RecklessFFI.xcframework) is
+# validated by the Release workflow, which builds + publishes the xcframework.
+#
+# GATED OFF — auto-triggers are commented out below.  Nothing runs on
+# push or pull_request until you opt in.  To run immediately:
+#   GitHub → Actions → CI → "Run workflow"
+#
+# To enable on-branch CI uncomment the push / pull_request block below.
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
+  # Uncomment to enable on-branch CI:
+  # push:
+  # pull_request:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -32,14 +41,20 @@ jobs:
       - name: swift test
         run: swift test
 
-  macos:
-    name: macOS (source arm, host stubs)
-    runs-on: macos-latest
+  macos-self-hosted:
+    name: macOS — self-hosted (Intel Mac Pro, source arm)
+    runs-on: [self-hosted, macOS]
     env:
+      # Force the source arm so the job does not require the prebuilt
+      # RecklessFFI.xcframework (gitignored, ~90 MB, built on-demand via
+      # Tools/build-xcframework.sh).  The xcframework is validated by the
+      # Release workflow instead.
       SWIFTRECKLESS_FORCE_SOURCE_BUILD: '1'
     steps:
       - uses: actions/checkout@v4
       - name: swift build
         run: swift build
       - name: swift test
+        # The NNUE-guarded live engine smoke test skips cleanly when the
+        # net file is absent (gitignored).  All other tests run normally.
         run: swift test
