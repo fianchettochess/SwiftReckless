@@ -1,0 +1,74 @@
+name: Upstream watch
+
+# Daily check for a newer upstream Reckless STABLE release. If upstream's
+# `releases/latest` tag differs from the pinned `.upstream-version`, open ONE
+# tracking issue (idempotent across open + closed issues) rendered from
+# `.github/upstream-watch-issue.md`.
+#
+# This workflow only NOTIFIES. It never fetches source, builds, tags, or
+# releases. Ingesting a new Reckless version is inherently manual here: the
+# build uses the patched fork `fianchettochess/Reckless`, so an update means
+# rebasing four custom patches onto the new upstream tag — not a mechanical
+# swap. The tracking issue carries that checklist.
+#
+# Upstream tags `v0.NN.0-dev-*` prereleases but publishes only stable `vX.Y.Z`
+# as Releases, so `releases/latest` already filters to stable-only.
+
+on:
+  schedule:
+    - cron: '37 9 * * *'      # daily, 09:37 UTC (offset from SwiftStockfish)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM_REPO: codedeliveryservice/Reckless
+      UPSTREAM_NAME: Reckless
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare upstream release against pinned version
+        run: |
+          set -euo pipefail
+
+          pinned="$(tr -d '[:space:]' < .upstream-version)"
+          latest="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          echo "pinned=${pinned}  upstream-latest=${latest:-<none>}"
+
+          if [ -z "${latest}" ]; then
+            echo "No upstream release found; skipping."
+            exit 0
+          fi
+          if [ "${latest}" = "${pinned}" ]; then
+            echo "Already at the latest upstream release; nothing to do."
+            exit 0
+          fi
+
+          # Idempotent: never open a second issue for the same upstream version,
+          # even if a prior one was already closed.
+          marker="${UPSTREAM_NAME} ${latest}"
+          existing="$(gh issue list --state all --limit 200 --json title \
+            --jq "[.[] | select(.title | contains(\"${marker}\"))] | length")"
+          if [ "${existing}" != "0" ]; then
+            echo "Tracking issue for '${marker}' already exists; nothing to do."
+            exit 0
+          fi
+
+          gh label create upstream-update --color 1D76DB \
+            --description "A new upstream engine release is available" \
+            --force >/dev/null 2>&1 || true
+
+          body="$(mktemp)"
+          sed "s|@NAME@|${UPSTREAM_NAME}|g; s|@PINNED@|${pinned}|g; s|@LATEST@|${latest}|g; s|@REPO@|${UPSTREAM_REPO}|g" \
+            .github/upstream-watch-issue.md > "${body}"
+
+          gh issue create \
+            --title "Upstream update: ${UPSTREAM_NAME} ${latest} available (pinned: ${pinned})" \
+            --label upstream-update \
+            --body-file "${body}"
