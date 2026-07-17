@@ -63,8 +63,9 @@ library product to your target.
 ## Apple xcframework
 
 On Apple platforms the engine links a prebuilt `Frameworks/RecklessFFI.xcframework`.
-The xcframework is also **gitignored** (never committed, ~90 MB). A fresh clone must
-build it once before a plain `swift build` will link on Apple:
+The xcframework is **committed** to `main` (a path-based binary target), so a fresh
+clone links with a plain `swift build` on Apple — no rebuild needed. Rebuild it only
+when the Rust engine changes:
 
 ```bash
 # macOS only (development)

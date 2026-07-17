@@ -180,7 +180,7 @@ The Rust FFI crate guarantees:
 2. After `rk_destroy` returns, no further output callbacks can fire.
 3. All memory allocated by the Rust engine (NNUE weights, hash tables) is freed.
 
-There is no use-after-free window. However, pinned fork revision `c864db1`
+There is no use-after-free window. However, pinned fork revision `420b3d7`
 cannot safely initialize its global cuckoo/NNUE lookup tables twice. The FFI
 therefore rejects any second engine creation in one process. Restart support
 requires `std::sync::Once` guards in the fork, a pin bump, and rebuilt binary

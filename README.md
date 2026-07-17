@@ -46,7 +46,7 @@ SwiftReckless/
 │   │   └── ffi.rs                      # extern "C" rk_ffi_* — real bodies, drive reckless::run_io
 │   └── tests/
 │       └── ffi_smoke.rs                # cargo-test C-ABI regression (net-guarded)
-├── Frameworks/                        # RecklessFFI.xcframework — built on-demand, GITIGNORED (never committed)
+├── Frameworks/                        # RecklessFFI.xcframework — COMMITTED (path-based main; rebuild only when the Rust changes)
 └── Tools/
     ├── build-macos.sh                 # macOS fat lib → xcframework
     ├── build-xcframework.sh           # Full Apple gamut (iOS/macOS/Mac Catalyst/tvOS/watchOS/visionOS)
@@ -88,7 +88,7 @@ stdout/fd redirection** (a deliberate change from an earlier stdout-hijack spike
 The Rust FFI enforces **one live engine per process** with a lifecycle gate,
 because the engine owns process-global tables / NNUE weights. It currently also
 allows only **one successful engine lifetime per process**: pinned fork revision
-`c864db1` reruns `lookup::initialize()` on a restart, and its second
+`420b3d7` reruns `lookup::initialize()` on a restart, and its second
 `init_cuckoo()` can loop forever against the already-populated global table. The
 wrapper therefore rejects overlap and later creates with `NULL` instead of
 hanging. Removing this temporary containment requires guarding the fork's
@@ -116,8 +116,10 @@ then changing the FFI regression to expect a successful second lifetime.
 - On any non-Android host in the source arm, `RecklessHostStubs.c` provides no-op
   `rk_ffi_*` symbols so the Skip/Gradle host-introspection pass links cleanly.
 
-The prebuilt `xcframework` is **gitignored and never committed** (~90 MB); a fresh
-clone must build it once (see below) before a plain `swift build` on Apple will link.
+The prebuilt `xcframework` is **committed** to `main` (a path-based binary target),
+so a fresh clone links with a plain `swift build` on Apple — no rebuild needed.
+Rebuild it (see below) only when the Rust engine changes; the release tag rewrites
+the binary target to `url:` + `checksum:` so the tag itself stays lean.
 
 Quick sanity check:
 
@@ -219,7 +221,7 @@ cancelling one of its waiters does not finish output for later searches.
 | Property | Value |
 |---|---|
 | Upstream repo | https://github.com/codedeliveryservice/Reckless |
-| Dependency actually used | Maintained fork **`github.com/fianchettochess/Reckless.git`**, pinned `rev = "420b3d7"`, `default-features = false` (branch `swiftreckless` on upstream tag `v0.9.0`; four patches: a `[lib]` target, runtime NNUE loading, per-instance I/O, and terminal-position guarding) |
+| Dependency actually used | Maintained fork **`github.com/fianchettochess/Reckless.git`**, pinned tag `swiftreckless-v0.9.0` (commit `420b3d7`), `default-features = false` (branch `swiftreckless` on upstream tag `v0.9.0`; four patches: a `[lib]` target, runtime NNUE loading, per-instance I/O, and terminal-position guarding) |
 | Language | Rust |
 | License | **AGPL-3.0** |
 | Protocol | UCI (`run_io` implements the message loop) |
