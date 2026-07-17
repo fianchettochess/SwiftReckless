@@ -28,10 +28,28 @@ extern "C" {
 #endif
 
 /// Opaque handle to a live Reckless engine instance.
+///
+/// CONTRACT for direct CReckless consumers (the Swift `RecklessEngine` wrapper
+/// upholds all of this internally, so Swift API users need not care):
+///   * At most ONE engine is live per process, and the pinned fork supports only
+///     one successful engine LIFETIME per process (a later `rk_create` returns
+///     NULL rather than restarting).
+///   * Call `rk_destroy` EXACTLY ONCE per non-NULL `rk_create`. A second
+///     `rk_destroy` on the same handle is a double-free / use-after-free, and any
+///     `rk_send_command` / `rk_set_output_callback` after `rk_destroy`
+///     dereferences freed memory — undefined behaviour; the handle is dangling
+///     once destroyed.
+///   * Do not call these concurrently on the same handle; serialize them.
+///   * NULL handles and a NULL `command` are defensively no-ops; every other
+///     misuse above is caller responsibility.
 typedef const void *RKEngineRef;
 
 /// Callback invoked (on the engine thread) for each UCI output line.
-/// `line`    — NUL-terminated UTF-8 string, without trailing newline.
+/// `line`    — NUL-terminated UTF-8 string, without trailing newline. A NULL
+///             `line` is a SENTINEL meaning the engine thread has EXITED (a
+///             normal quit or a contained panic): treat it as end-of-output, not
+///             a line, so a consumer awaiting output receives EOF instead of
+///             hanging.
 /// `context` — the opaque pointer passed to `rk_set_output_callback`.
 typedef void (*RKOutputCallback)(const char *line, const void *context);
 

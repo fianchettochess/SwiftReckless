@@ -35,3 +35,6 @@ networks/
 # it with Tools/build-xcframework.sh after each Reckless engine update and
 # commit the result. (No NNUE net is baked in; it loads at runtime from
 # rust/networks/.)
+
+# SwiftPM scratch/build dirs (incl. isolated --scratch-path)
+.build*/

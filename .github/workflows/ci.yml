@@ -13,17 +13,18 @@ name: CI
 # The BINARY arm (the real Rust engine via RecklessFFI.xcframework) is
 # validated by the Release workflow, which builds + publishes the xcframework.
 #
-# GATED OFF — auto-triggers are commented out below.  Nothing runs on
-# push or pull_request until you opt in.  To run immediately:
-#   GitHub → Actions → CI → "Run workflow"
-#
-# To enable on-branch CI uncomment the push / pull_request block below.
+# Runs on every push to `main`, every PR, and every version tag. On a tagged
+# release the self-hosted macOS runner additionally stages the NNUE net and runs
+# the REAL engine (binary arm, the committed xcframework) smoke test — see the
+# macOS job below — so a release validates the actual FFI, not just host stubs.
 
 on:
   workflow_dispatch:
-  # Uncomment to enable on-branch CI:
-  # push:
-  # pull_request:
+  push:
+    branches: [main]
+    tags:
+      - '*.*.*'
+  pull_request:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -58,3 +59,18 @@ jobs:
         # The NNUE-guarded live engine smoke test skips cleanly when the
         # net file is absent (gitignored).  All other tests run normally.
         run: swift test
+      - name: Live engine smoke — binary arm (tagged releases only)
+        # On a version tag, stage the net and run the REAL engine via the
+        # committed RecklessFFI.xcframework (binary arm — override the source
+        # force with an empty value) so a release validates the actual FFI.
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          SWIFTRECKLESS_FORCE_SOURCE_BUILD: ''
+        run: |
+          mkdir -p rust/networks
+          curl -fsSL -o rust/networks/v54-5478683c.nnue \
+            https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v54-5478683c.nnue
+          # Isolated scratch path so the binary arm builds fresh and is never
+          # served the source-arm (stub) build graph the earlier steps put under
+          # .build (SwiftPM does not always re-evaluate the arm on an env change).
+          swift test --scratch-path .build-binary

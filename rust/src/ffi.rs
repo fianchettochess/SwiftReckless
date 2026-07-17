@@ -318,6 +318,9 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
         callback_context: std::ptr::null(),
     }));
     let shared_cb_engine = Arc::clone(&shared_cb);
+    // A second handle used only to emit an end-of-output signal when the engine
+    // thread exits (see the thread body below).
+    let shared_cb_exit = Arc::clone(&shared_cb);
     // `rk_ffi_create` must not return while run_io is still constructing its
     // worker pool. An immediate destroy in that window exposed a Reckless
     // startup/teardown race that could hang the join. A private isready probe
@@ -360,6 +363,21 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
         reckless::set_output_sink(None);
         if !completed_without_panic {
             eprintln!("[creckless] reckless engine panicked; terminating this engine instance");
+        }
+        // Signal end-of-output to the host: a NULL line pointer tells the Swift
+        // output callback the engine thread has exited — a normal quit OR a
+        // contained panic — so a consumer awaiting the output stream gets EOF
+        // instead of hanging forever. The C callback lives in `shared_cb`
+        // (separate from the reckless sink cleared just above).
+        {
+            let cb_guard = shared_cb_exit.lock().unwrap();
+            if let Some(cb) = cb_guard.callback {
+                let ctx = cb_guard.callback_context;
+                drop(cb_guard);
+                // SAFETY: a NULL line is the agreed engine-exit sentinel; ctx
+                // outlives the engine per the Swift caller's contract.
+                unsafe { cb(std::ptr::null(), ctx) };
+            }
         }
     }) {
         Ok(handle) => handle,
