@@ -335,9 +335,17 @@ public final class RecklessEngine: @unchecked Sendable {
         // callback can never fire against a freed object.
         let context = Unmanaged.passUnretained(self).toOpaque()
         rk_set_output_callback(engine, { linePtr, ctx in
-            guard let linePtr, let ctx else { return }
-            let line = String(cString: linePtr)
+            guard let ctx else { return }
             let me = Unmanaged<RecklessEngine>.fromOpaque(ctx).takeUnretainedValue()
+            guard let linePtr else {
+                // A NULL line is the engine-thread-exit sentinel (a normal quit
+                // OR a contained Rust panic): finish the output stream so a
+                // consumer awaiting it receives EOF rather than hanging forever.
+                // Idempotent with shutdown()'s own finish().
+                me.outputStorage.finish()
+                return
+            }
+            let line = String(cString: linePtr)
             me.outputStorage.yield(line)
         }, context)
     }

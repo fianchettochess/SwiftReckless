@@ -144,9 +144,10 @@ if waitFor("bestmove", in: buf, timeoutSeconds: 30) {
 }
 
 // ── Shutdown ──────────────────────────────────────────────────────────────────
-err("sending 'quit'")
-engine.quit()
-// Give the collect Task a moment to drain, then cancel it.
+err("shutting down")
+// shutdown() sends quit, JOINS the engine thread, and finishes the output
+// stream (so the collect task ends cleanly rather than via the timeout below).
+engine.shutdown()
 _ = collectSema.wait(timeout: .now() + 5)
 collectTask.cancel()
 
