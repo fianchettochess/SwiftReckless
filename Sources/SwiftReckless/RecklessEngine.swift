@@ -259,6 +259,13 @@ public final class RecklessEngine: @unchecked Sendable {
 
     /// Cancellation-safe, process-lifetime UCI output. Prefer this surface for
     /// consumers that cancel and restart searches on the same engine instance.
+    ///
+    /// - Warning: This and ``output`` are **mutually exclusive** views of one
+    ///   single-consumer FIFO. Consume **only one of them** per engine instance.
+    ///   Merely *accessing* ``output`` starts a forwarding consumer that competes
+    ///   with this surface, silently splitting UCI lines (an awaited `bestmove`
+    ///   can be diverted and lost). For concrete Reckless consumers, use this
+    ///   surface and never touch ``output``.
     public var cancellationSafeOutput: RecklessOutput {
         RecklessOutput(storage: outputStorage)
     }
@@ -279,6 +286,13 @@ public final class RecklessEngine: @unchecked Sendable {
     /// `AsyncStream` it is single-consumer and cannot be restarted; restarting
     /// concrete Reckless consumers should use ``cancellationSafeOutput``
     /// directly.
+    ///
+    /// - Warning: This is a compatibility shim for the shared `UCIEngine`
+    ///   protocol and is **mutually exclusive** with ``cancellationSafeOutput``
+    ///   (both drain the same single-consumer FIFO). The forwarding consumer
+    ///   starts on the **first access** to this property — so even touching it
+    ///   once while another part of the app drives ``cancellationSafeOutput``
+    ///   splits the UCI output between the two. Pick one surface per engine.
     public var output: AsyncStream<String> {
         forwardedOutput.stream
     }

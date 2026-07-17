@@ -26,9 +26,10 @@ This prevents Xcode from attempting to link an Android ELF into a macOS build.
 
 ## Building the Apple xcframework
 
-The xcframework is **gitignored** (`Frameworks/` in `.gitignore`). A fresh clone
-needs to build it once. The release CI publishes it as a GitHub release asset; a
-tagged SPM dependency fetches it automatically via the `url:` + `checksum:` binary target.
+The xcframework is **committed** to `main` (a path-based binary target), so a fresh
+clone builds on Apple without rebuilding it; rebuild only when the Rust changes. The
+release CI publishes it as a GitHub release asset, and a tagged SPM dependency fetches
+it automatically via the `url:` + `checksum:` binary target.
 
 ### macOS only (development)
 
@@ -130,7 +131,7 @@ links cleanly without an Android NDK.
 ## The Reckless fork
 
 The Rust dependency is `github.com/fianchettochess/Reckless.git`, pinned to
-`rev = "420b3d7"` (`default-features = false`). The fork makes four patches to the
+tag `swiftreckless-v0.9.0` (commit `420b3d7`) (`default-features = false`). The fork makes four patches to the
 upstream `codedeliveryservice/Reckless` at tag `v0.9.0`:
 
 1. Adds a `[lib]` target (upstream Reckless is binary-only; it has no library target

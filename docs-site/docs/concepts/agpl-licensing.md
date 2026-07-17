@@ -52,7 +52,7 @@ a consuming target links individually.
 |---|---|
 | Upstream | https://github.com/codedeliveryservice/Reckless |
 | License | AGPL-3.0 |
-| Fork used | `github.com/fianchettochess/Reckless.git`, pinned `rev = "420b3d7"` |
+| Fork used | `github.com/fianchettochess/Reckless.git`, pinned tag `swiftreckless-v0.9.0` (commit `420b3d7`) |
 | Fork branch | `swiftreckless` on upstream tag `v0.9.0` |
 
 The fork makes four focused patches: it adds a `[lib]` target (upstream Reckless is
