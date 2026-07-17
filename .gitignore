@@ -38,3 +38,5 @@ networks/
 
 # SwiftPM scratch/build dirs (incl. isolated --scratch-path)
 .build*/
+Frameworks/*.xcframework
+RecklessFFI.xcframework.zip
