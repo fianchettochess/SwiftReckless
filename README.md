@@ -13,8 +13,9 @@ Structured as a sibling to [SwiftStockfish](https://github.com/fianchettochess/S
 and designed so the existing `UCIInfoParser` / `EngineProbe` layer in Fianchetto can
 be adapted to either engine with minimal changes.
 
-> **Status: released & consumed.** Tagged releases `0.9.0`–`0.9.7` (latest carries
-> the engine-death EOF-sentinel fix); each release publishes `RecklessFFI.xcframework`
+> **Status: released & consumed.** Tagged releases `0.9.0`–`0.9.8` (latest adds
+> restartable engine lifetimes — the host can shed and respawn the engine, freeing
+> the ~63 MB net between lifetimes); each release publishes `RecklessFFI.xcframework`
 > as a `url:` + `checksum:` asset while `main` stays path-based with the prebuilt
 > xcframework **committed**. CI builds + tests the source arm on Linux and macOS for
 > every push/PR and validates the real engine (binary arm, staged net) on release
@@ -32,7 +33,7 @@ be adapted to either engine with minimal changes.
 Add **SwiftReckless** with Swift Package Manager:
 
 ```swift
-.package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.7")
+.package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.8")
 ```
 
 ---
