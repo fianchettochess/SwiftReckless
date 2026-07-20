@@ -1,5 +1,11 @@
 # SwiftReckless
 
+[![Swift Package Index — Swift versions](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Ffianchettochess%2FSwiftReckless%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/fianchettochess/SwiftReckless)
+[![Swift Package Index — Platforms](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Ffianchettochess%2FSwiftReckless%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/fianchettochess/SwiftReckless)
+[![Release](https://img.shields.io/github/v/release/fianchettochess/SwiftReckless?sort=semver&label=release&color=blue)](https://github.com/fianchettochess/SwiftReckless/releases)
+[![CI](https://github.com/fianchettochess/SwiftReckless/actions/workflows/ci.yml/badge.svg)](https://github.com/fianchettochess/SwiftReckless/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+
 A Swift Package Manager wrapper around the [Reckless](https://github.com/codedeliveryservice/Reckless)
 chess engine — a competitive UCI engine written in Rust (AGPL-3.0).
 
@@ -310,3 +316,11 @@ cd rust && cargo test   # Rust C-ABI regression (tests/ffi_smoke.rs)
 
 There is no `SWIFTRECKLESS_INTEGRATION` env var or separate integration target — gating
 is purely by whether the NNUE net is staged on disk.
+
+## License
+
+AGPL-3.0 — see [LICENSE](LICENSE) — matching the upstream
+[Reckless](https://github.com/codedeliveryservice/Reckless) engine this
+package builds from source. The bundled NNUE network comes from
+[RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks)
+under the same license.
