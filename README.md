@@ -35,9 +35,6 @@ Add **SwiftReckless** with Swift Package Manager:
 .package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.7")
 ```
 
-The repo is private until release, so local-path sibling checkouts
-(`.package(path: "../SwiftReckless")`) are the working form today.
-
 ---
 
 ## Architecture
