@@ -18,10 +18,11 @@
 //  FFI reads the net at runtime (`rk_ffi_create` receives the full path) and
 //  returns nil if the file is missing or unreadable.
 //
-//  CONCURRENCY: one `RecklessEngine` per process — the Rust engine owns
-//  process-global tables. The FFI rejects overlap and, while the pinned fork's
-//  lookup initializer remains non-idempotent, rejects a second engine lifetime
-//  in the same process. `@unchecked Sendable` is backed by the teardown lock
+//  CONCURRENCY: one `RecklessEngine` at a time — the Rust engine owns
+//  process-global tables, so the FFI rejects overlap. Sequential lifetimes
+//  are supported (fork swiftreckless-v0.9.1+): a clean `shutdown()` unloads
+//  the ~60 MB net and releases the process slot, and a later `init` starts a
+//  fresh engine. `@unchecked Sendable` is backed by the teardown lock
 //  below and the Rust mutex/channel implementation.
 //
 
@@ -240,10 +241,12 @@ private func recklessLog(_ message: String) {
 ///   if the file cannot be read, which surfaces as `init` returning `nil`
 ///   here.  Run ``RecklessNetworkLoader/ensure(in:progress:)`` first.
 ///
-/// - Important: Only ONE `RecklessEngine` may be alive in a process at a time.
-///   The Rust engine owns process-global state (lookup tables, NNUE weights).
-///   The currently pinned fork also supports only one successful engine
-///   lifetime per process; a later `init` returns `nil` rather than hanging.
+/// - Important: Only ONE `RecklessEngine` may be alive in a process at a
+///   time (the Rust engine owns process-global state), but sequential
+///   lifetimes are supported: after ``shutdown()`` a later `init` starts a
+///   fresh engine and reloads the net from disk. UCI options reset to
+///   defaults per lifetime — callers must re-send any `setoption` state
+///   (every in-app search path already re-sends MultiPV before `go`).
 public final class RecklessEngine: @unchecked Sendable {
 
     // Opaque Rust handle (`const void *` in C, OpaquePointer in Swift).
@@ -304,8 +307,9 @@ public final class RecklessEngine: @unchecked Sendable {
     ///   ``RecklessNetworkLoader/ensure(in:progress:)`` to provision it.
     ///
     /// - Returns: `nil` if the net file is not present in `networkDirectory`,
-    ///   if the Rust FFI layer could not start it, or if this process already
-    ///   used its one engine lifetime under the currently pinned fork.
+    ///   if the Rust FFI layer could not start it, if another engine is
+    ///   currently live, or if an earlier failed startup left its engine
+    ///   thread unjoined (which poisons the process's engine slot).
     public init?(networkDirectory: URL) {
         // One cached adapter per engine (creating the box spawns no task;
         // the forwarding consumer starts on `output`'s first access).

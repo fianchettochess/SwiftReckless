@@ -19,18 +19,20 @@ crate-type = ["staticlib", "rlib"]
 # libc is needed for c_char, c_void types in the FFI surface.
 libc = "0.2"
 # Our maintained fork of Reckless (github.com/fianchettochess/Reckless, branch
-# `swiftreckless` on upstream tag v0.9.0): four patches on top of upstream — a
+# `swiftreckless` on upstream tag v0.9.0): five patches on top of upstream — a
 # [lib] target, runtime NNUE loading, per-instance I/O (run_io + uci_out! sink),
-# and the terminal-position guard (empty root_moves → "bestmove (none)" instead
-# of a SIGABRT; exercised by examples/terminal_guard.rs). Kept local to the fork
-# by design (owner decision 2026-07-06 — no upstreaming).
+# the terminal-position guard (empty root_moves → "bestmove (none)" instead
+# of a SIGABRT; exercised by examples/terminal_guard.rs), and restart safety
+# (unloadable net + Once-guarded table init + joined worker pool, so a host
+# can run repeated engine lifetimes and shed the ~60 MB net between them).
+# Kept local to the fork by design (owner decision 2026-07-06 — no upstreaming).
 #
 # Pinned by an IMMUTABLE TAG, not a branch tip: the tagged commit stays reachable
 # (and so does the AGPL corresponding source for every binary we ship) even after
 # the fork branch is rebased. To pull upstream: rebase `swiftreckless` onto the
 # new upstream tag, tag that commit (e.g. `swiftreckless-v0.10.0`), and bump the
 # `tag` below.
-reckless = { git = "https://github.com/fianchettochess/Reckless.git", tag = "swiftreckless-v0.9.0", default-features = false }
+reckless = { git = "https://github.com/fianchettochess/Reckless.git", tag = "swiftreckless-v0.9.1", default-features = false }
 
 [profile.release]
 # LTO is disabled to ensure the C-exported rk_ffi_* symbols appear in
