@@ -1,7 +1,8 @@
 # Engine API
 
 `RecklessEngine` is the public Swift interface to the Reckless UCI engine. It wraps
-the C FFI bridge in `CReckless`, exposes an `AsyncStream<String>` for output, and
+the C FFI bridge in `CReckless`, exposes a cancellation-safe UCI output channel
+(`cancellationSafeOutput`, plus an `AsyncStream<String>` compatibility adapter), and
 provides convenience methods for common UCI commands.
 
 Its shape mirrors `StockfishEngine` in SwiftStockfish by design, so the Fianchetto
@@ -44,16 +45,34 @@ public init?(networkDirectory: URL)
 
 ## Properties
 
+### `cancellationSafeOutput`
+
+```swift
+public var cancellationSafeOutput: RecklessOutput { get }
+```
+
+Cancellation-safe, process-lifetime UCI output. Lines are delivered in order,
+stripped of their trailing newline. Cancelling or breaking one iterator leaves the
+channel reusable for later reads. **Prefer this surface for any consumer that stops
+and restarts reads** (e.g. handshake loop, then a separate `bestmove` loop). The
+channel finishes when the engine is destroyed (`deinit` or explicit `shutdown()`)
+or when the engine thread exits.
+
 ### `output`
 
 ```swift
 public var output: AsyncStream<String> { get }
 ```
 
-An async stream of UCI output lines from the engine, delivered in order. Lines are
-stripped of their trailing newline. The stream is unbounded-buffered — iterate
-promptly if you care about back-pressure. The stream finishes when the engine is
-destroyed (`deinit` or explicit `shutdown()`).
+Compatibility shim for the shared `UCIEngine` protocol; **single-consumer and
+non-restartable** — breaking out of its `for await` loop ends it permanently. The
+stream is unbounded-buffered — iterate promptly if you care about back-pressure. It
+finishes when the engine is destroyed (`deinit` or explicit `shutdown()`).
+
+!!! warning "Mutually exclusive with `cancellationSafeOutput`"
+    Consuming (or even first-accessing) both surfaces splits UCI lines between two
+    consumers — an awaited `bestmove` can be silently diverted and lost. Pick one
+    surface per engine.
 
 ## Raw command interface
 

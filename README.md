@@ -13,12 +13,30 @@ Structured as a sibling to [SwiftStockfish](https://github.com/fianchettochess/S
 and designed so the existing `UCIInfoParser` / `EngineProbe` layer in Fianchetto can
 be adapted to either engine with minimal changes.
 
-> **Status: wired & working.** The Rust FFI bridge drives Reckless in-process; the
-> `RecklessEngine` Swift API works end-to-end on the host (verified: `swift test`
-> runs a live `uci → uciok / isready → readyok / go → bestmove` handshake), and the
-> Apple `xcframework` builds on-demand. The engine is consumed as a pinned git
-> dependency on a maintained fork (see [Reckless engine facts](#reckless-engine-facts));
-> it is **not** vendored in-tree by design.
+> **Status: released & consumed.** Tagged releases `0.9.0`–`0.9.7` (latest carries
+> the engine-death EOF-sentinel fix); each release publishes `RecklessFFI.xcframework`
+> as a `url:` + `checksum:` asset while `main` stays path-based with the prebuilt
+> xcframework **committed**. CI builds + tests the source arm on Linux and macOS for
+> every push/PR and validates the real engine (binary arm, staged net) on release
+> tags. Consumed by the Fianchetto app (iOS and Android). The `RecklessEngine` API
+> works end-to-end (verified: `swift test` runs a live
+> `uci → uciok / isready → readyok / go → bestmove` handshake when the net is
+> staged). The engine is a pinned git dependency on a maintained fork (see
+> [Reckless engine facts](#reckless-engine-facts)); it is **not** vendored in-tree
+> by design.
+
+---
+
+## Installation
+
+Add **SwiftReckless** with Swift Package Manager:
+
+```swift
+.package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.7")
+```
+
+The repo is private until release, so local-path sibling checkouts
+(`.package(path: "../SwiftReckless")`) are the working form today.
 
 ---
 
@@ -41,18 +59,23 @@ SwiftReckless/
 │       └── main.swift                  # End-to-end UCI smoke executable (`swift run reckless-smoke`)
 ├── Tests/
 │   └── SwiftRecklessTests/
-│       └── SwiftRecklessTests.swift    # Offline loader suite + net-guarded live engine smoke
+│       ├── SwiftRecklessTests.swift    # Offline loader + output-cancellation suites + net-guarded live engine smoke
+│       ├── RecklessNetworkLoaderCancellationTests.swift  # hermetic Transport-seam download/cancellation suite
+│       └── TransportSpy.swift
 ├── rust/                              # Rust FFI crate (creckless)
 │   ├── Cargo.toml                      # [lib] staticlib+rlib; reckless = maintained-fork git dep
 │   ├── examples/
 │   │   ├── ffi_smoke.rs                # standalone C-ABI exercise
-│   │   └── spike.rs
+│   │   ├── spike.rs
+│   │   └── terminal_guard.rs           # terminal-position-guard exercise (see the fork-patch note in Cargo.toml)
 │   ├── src/
 │   │   ├── lib.rs
 │   │   └── ffi.rs                      # extern "C" rk_ffi_* — real bodies, drive reckless::run_io
 │   └── tests/
 │       └── ffi_smoke.rs                # cargo-test C-ABI regression (net-guarded)
 ├── Frameworks/                        # RecklessFFI.xcframework — COMMITTED (path-based main; rebuild only when the Rust changes)
+├── .github/workflows/                 # ci.yml (push/PR/tag), release.yml (url+checksum tag rewrite), upstream-watch.yml (daily notify-only)
+├── docs-site/                         # MkDocs documentation site
 └── Tools/
     ├── build-macos.sh                 # macOS fat lib → xcframework
     ├── build-xcframework.sh           # Full Apple gamut (iOS/macOS/Mac Catalyst/tvOS/watchOS/visionOS)
@@ -86,6 +109,10 @@ void        rk_send_command(RKEngineRef engine, const char *command);
 `rk_create` loads the NNUE net from `network_path` (via `reckless::nnue::load_network`)
 and spawns a named background thread running `reckless::run_io(initial_cmds, rx, output_sink)`.
 Input is delivered over an `mpsc::Sender`; each UCI output line fires the C callback.
+When the engine thread exits — a normal `quit` or a contained Rust panic — the
+callback fires one final time with a **NULL `line`** (an EOF sentinel): treat it as
+end-of-output, not a line, so a consumer awaiting output receives EOF instead of
+hanging. The Swift wrapper finishes its output stream on this sentinel.
 `rk_destroy` sends `quit`, drops the channel, and `join()`s the thread — after which no
 further callbacks can fire.
 
@@ -132,7 +159,7 @@ Quick sanity check:
 ```bash
 swift build                 # Apple host: binary arm, links the existing xcframework
 swift run reckless-smoke    # drives uci → uciok end-to-end
-swift test                  # offline loader suite + (net-guarded) live engine smoke
+swift test                  # 4 suites: loader offline + output-cancellation + hermetic download/cancellation + net-guarded live engine smoke
 ```
 
 ---
@@ -173,7 +200,8 @@ Reckless selects the vectorised vs scalar NNUE path at compile time via
 `#[cfg(target_feature = "…")]`, so these flags directly activate the fast path. The
 xcframework carries per-arch slices with their SIMD code already baked in, so the
 consuming Swift package inherits the optimal path per device with no per-arch flags at
-the SPM level (same design as the Stockfish xcframework in SwiftStockfish).
+the SPM level (same design as the Stockfish xcframework in
+[SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish)).
 
 ### Android / Skip (SkipFuse)
 
@@ -255,7 +283,8 @@ The network (`v54-5478683c.nnue`) is **NEVER committed** to this repo or to any
 Fianchetto repo (`.gitignore` bans `*.nnue` and `networks/`). Policy mirrors the
 `.nnue` ban in the Fianchetto memory files.
 
-Runtime strategy (same as Stockfish nets in SwiftStockfish):
+Runtime strategy (same as Stockfish nets in
+[SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish)):
 - `RecklessNetworkLoader().ensure(in:)` downloads from the
   [RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/)
   release page on first launch (~60 MB).
@@ -303,19 +332,27 @@ swift test          # Swift suites (see below)
 cd rust && cargo test   # Rust C-ABI regression (tests/ffi_smoke.rs)
 ```
 
-`Tests/SwiftRecklessTests` has two [swift-testing](https://github.com/apple/swift-testing) suites:
+`Tests/SwiftRecklessTests` has four [swift-testing](https://github.com/apple/swift-testing) suites:
 
-1. **`RecklessNetworkLoader offline tests`** — always runs. Asserts the pinned `v54`
-   net spec, complete SHA-256 verification (including a same-prefix/wrong-tail
-   regression), the SHA-prefix/filename encoding, and that `RecklessEngine(networkDirectory:)`
-   returns `nil` when the net is absent.
-2. **`RecklessEngine smoke`** — a real `uci → uciok / isready → readyok / go → bestmove`
+1. **`RecklessNetworkLoader offline tests`** — always runs. Pinned `v54` net spec,
+   full-SHA-256 verification (including a same-prefix/wrong-tail regression), the
+   SHA-prefix/filename encoding, nil-init without the net, and the prune sweep
+   (orphaned `.part` staging files + stale nets).
+2. **`Reckless output cancellation`** — the `RecklessOutput` channel:
+   pre-subscription buffering, per-waiter cancellation, iterator reuse, and the
+   single-forwarding-consumer `output` regression.
+3. **`RecklessNetworkLoader cancellation (hermetic)`** — download, cancellation,
+   and staging-file lifecycle via the injected `Transport` seam (no network).
+4. **`RecklessEngine smoke`** — a real `uci → uciok / isready → readyok / go → bestmove`
    handshake against the live engine. It is **guarded on the staged net** at
-   `rust/networks/`: present → the handshake runs; absent → the test skips-and-passes.
+   `rust/networks/`: present → the handshake runs; absent → a RECORDED skip
+   (visible in the test log, never a silent pass). It also skips on the
+   forced-source macOS arm (`SWIFTRECKLESS_FORCE_SOURCE_BUILD=1`), which links
+   no-op host stubs rather than the real engine.
    `rust/tests/ffi_smoke.rs` is the equivalent C-ABI regression under `cargo test`.
 
 There is no `SWIFTRECKLESS_INTEGRATION` env var or separate integration target — gating
-is purely by whether the NNUE net is staged on disk.
+is by net presence at `rust/networks/` plus not being a forced-source stub build.
 
 ## License
 

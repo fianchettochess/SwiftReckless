@@ -61,13 +61,18 @@ public struct RecklessNetworkLoader: Sendable {
 `ensure(in:progress:)`:
 
 1. Creates `directory` if it does not exist.
-2. If `v54-5478683c.nnue` is already present and passes complete SHA-256 verification,
+2. Prunes the directory: stale `v…-….nnue` nets from a previous Reckless version
+   and orphaned hidden `.….nnue.<UUID>.part` download-staging files from a crashed
+   earlier run are deleted (other files are never touched). Don't point
+   `ensure(in:)` at a directory holding unrelated `v*-*.nnue` files you want to
+   keep.
+3. If `v54-5478683c.nnue` is already present and passes complete SHA-256 verification,
    returns
    immediately — **no download, no network access**.
-3. If missing or invalid: downloads to a temporary location, verifies the SHA-256
+4. If missing or invalid: downloads to a temporary location, verifies the SHA-256
    digest (see [cross-platform note](#sha-256-verification-and-cross-platform-crypto)),
    and atomically moves the file into place.
-4. Returns the `URL` of the verified network file inside `directory`.
+5. Returns the `URL` of the verified network file inside `directory`.
 
 The operation is **idempotent**. A warm launch with a valid net is a fast
 checksum-only no-op.

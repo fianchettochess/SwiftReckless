@@ -2,16 +2,15 @@ name: CI
 
 # Build + test the SOURCE arm (host stubs) on Linux and macOS.
 #
-# SOURCE ARM rationale: the Rust xcframework (RecklessFFI.xcframework) is
-# gitignored and not committed — a fresh checkout won't have it.  The source
-# arm (non-Apple host, or SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 on macOS)
-# compiles the thin C bridge + RecklessHostStubs.c (no-op rk_ffi_* symbols)
-# so the package builds and tests without the Rust engine binary.  The NNUE
-# net is also gitignored, so the net-guarded engine smoke test correctly
-# skips-and-passes.
+# SOURCE ARM rationale: the committed RecklessFFI.xcframework only serves
+# Apple hosts; the source arm (non-Apple host, or
+# SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 on macOS) compiles the thin C bridge +
+# RecklessHostStubs.c (no-op rk_ffi_* symbols), proving the package builds and
+# tests on Linux and on macOS without the binary engine.  The NNUE net is
+# gitignored, so the net-guarded engine smoke test records a skip.
 #
-# The BINARY arm (the real Rust engine via RecklessFFI.xcframework) is
-# validated by the Release workflow, which builds + publishes the xcframework.
+# The BINARY arm (the real Rust engine via the committed xcframework) is
+# validated by this workflow's tagged-release step and by the Release workflow.
 #
 # Runs on every push to `main`, every PR, and every version tag. On a tagged
 # release the self-hosted macOS runner additionally stages the NNUE net and runs
@@ -46,10 +45,10 @@ jobs:
     name: macOS — self-hosted (Intel Mac Pro, source arm)
     runs-on: [self-hosted, macOS]
     env:
-      # Force the source arm so the job does not require the prebuilt
-      # RecklessFFI.xcframework (gitignored, ~90 MB, built on-demand via
-      # Tools/build-xcframework.sh).  The xcframework is validated by the
-      # Release workflow instead.
+      # Force the source arm past the prebuilt RecklessFFI.xcframework
+      # (committed, ~150 MB — forced off here so this job exercises the
+      # stub/source arm).  The xcframework is validated by the tagged-release
+      # step below and by the Release workflow.
       SWIFTRECKLESS_FORCE_SOURCE_BUILD: '1'
     steps:
       - uses: actions/checkout@v4

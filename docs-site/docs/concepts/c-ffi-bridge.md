@@ -21,7 +21,10 @@ The public Swift module interface consists of four C declarations:
 typedef const void *RKEngineRef;
 
 /// Callback invoked (on the engine thread) for each UCI output line.
-/// `line`    — NUL-terminated UTF-8 string, without trailing newline.
+/// `line`    — NUL-terminated UTF-8 string, without trailing newline. A NULL
+///             `line` is a sentinel meaning the engine thread has exited
+///             (normal quit or contained panic) — treat it as end-of-output,
+///             not a line.
 /// `context` — the opaque pointer passed to rk_set_output_callback.
 typedef void (*RKOutputCallback)(const char *line, const void *context);
 
@@ -69,8 +72,8 @@ void        rk_send_command(...)                 { rk_ffi_send_command(...); }
 - Input is delivered via `mpsc::Sender`; `rk_send_command` is therefore thread-safe
   (it only calls `Sender::send`).
 - Each UCI output line fires the registered `RKOutputCallback` on the **engine thread**.
-  `AsyncStream.Continuation` is `Sendable` / thread-safe, so `RecklessEngine` feeds
-  the stream from the callback without additional locking.
+  `RecklessEngine` feeds its lock-protected output FIFO (`RecklessOutputStorage`)
+  from the callback, so no additional synchronization is needed on the Swift side.
 - `rk_destroy` sends `"quit"`, drops the `Sender` (causing `run_io` to observe
   channel closure), and `join()`s the thread. After it returns, the callback can
   never fire — there is no use-after-free window.
@@ -82,9 +85,10 @@ buffers — the Reckless bridge uses **per-instance callback delivery with no
 stdout/fd redirection**. There is no global stream manipulation; all I/O flows
 through the `mpsc` channel and the C callback registered via `rk_set_output_callback`.
 
-This design makes the bridge cleaner for multi-engine-lifetime scenarios (create,
-use, destroy, create again) and eliminates the class of bugs caused by a leaked
-stream-buffer swap.
+This design eliminates the class of bugs caused by a leaked stream-buffer swap.
+(It also clears the path to future create→destroy→create-again support, but the
+currently pinned fork still allows only one engine lifetime per process — see
+[Engine API → Teardown sequence](engine-api.md#teardown-sequence).)
 
 ## Swift-to-C mapping in `RecklessEngine`
 
@@ -95,21 +99,32 @@ let ref = netFile.path.withCString { rk_create($0) }   // → RKEngineRef (Opaqu
 // Register callback — bridge `self` as an unretained void*
 let context = Unmanaged.passUnretained(self).toOpaque()
 rk_set_output_callback(engine, { linePtr, ctx in
-    let line = String(cString: linePtr!)
-    let me = Unmanaged<RecklessEngine>.fromOpaque(ctx!).takeUnretainedValue()
-    me.continuation.yield(line)
+    guard let ctx else { return }
+    let me = Unmanaged<RecklessEngine>.fromOpaque(ctx).takeUnretainedValue()
+    guard let linePtr else {
+        // NULL line = the engine-thread-exit sentinel (normal quit or a
+        // contained Rust panic): finish the output channel so consumers
+        // receive EOF instead of hanging.
+        me.outputStorage.finish()
+        return
+    }
+    me.outputStorage.yield(String(cString: linePtr))
 }, context)
 
 // send(_:)
 command.withCString { rk_send_command(engine, $0) }
 
-// deinit
+// Teardown: shutdown() — idempotent (teardown lock + isShutdown flag);
+// deinit merely calls it if explicit teardown was omitted.
 rk_destroy(engine)
-continuation.finish()
+outputStorage.finish()
 ```
 
-The unretained pointer is safe because `deinit` calls `rk_destroy` (which joins the
-engine thread) before `self` is deallocated, guaranteeing the callback cannot fire
+The callback yields into `RecklessOutputStorage` — the lock-protected FIFO behind
+`cancellationSafeOutput` and the `output` adapter — not into a bare
+`AsyncStream.Continuation`. The unretained pointer is safe because `shutdown()`
+(called by `deinit` at the latest) calls `rk_destroy` (which joins the engine
+thread) before `self` is deallocated, guaranteeing the callback cannot fire
 against a freed object.
 
 ## `RecklessHostStubs.c`

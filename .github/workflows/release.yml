@@ -14,7 +14,7 @@ name: Release binary
 # does NOT start another workflow run, so the push trigger cannot loop.
 #
 # WHY main is never pushed: `main` is intentionally kept PATH-BASED (its
-# binaryTarget points at Frameworks/RecklessFFI.xcframework, built on-demand). The
+# binaryTarget points at the COMMITTED Frameworks/RecklessFFI.xcframework). The
 # url-rewritten commit lives ONLY on the release TAG: we commit it on a DETACHED
 # HEAD, tag that commit, and push just the tag. `main` is never mutated.
 #
@@ -128,9 +128,9 @@ jobs:
             "${CHECKSUM}"
           swift package dump-package >/dev/null
 
-      # main already gitignores the xcframework (built on-demand), so the git rm is
-      # a no-op; keep it + the zip removal so a `git add -A` can never sweep the
-      # binary or the release zip into the tagged commit.
+      # main commits the xcframework, so this git rm is REQUIRED — it strips the
+      # ~150 MB binary from the tagged commit; the .gitignore additions keep a
+      # later `git add -A` from sweeping the binary or the release zip back in.
       - name: Drop any committed binary + release zip; ignore future ones
         run: |
           git rm -rf --ignore-unmatch Frameworks/RecklessFFI.xcframework
