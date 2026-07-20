@@ -11,10 +11,13 @@
 //   * `rk_create` spawns a background thread that runs the Reckless UCI loop.
 //     The loop reads from an internal thread-safe queue (fed by `rk_send_command`)
 //     and writes to a callback (set by `rk_set_output_callback`).
-//   * One `RKEngineRef` per process — the Rust engine owns process-global state
-//     (look-up tables, NNUE weights) that cannot safely run in parallel. The
-//     pinned fork's lookup initialization is not restart-safe, so the bridge
-//     currently rejects overlap and any second engine lifetime in one process.
+//   * One `RKEngineRef` at a time — the Rust engine owns process-global state
+//     (look-up tables, NNUE weights) that cannot safely run in parallel, so
+//     overlapping engines are rejected. Repeated SEQUENTIAL lifetimes are
+//     supported (fork swiftreckless-v0.9.1+): a clean `rk_destroy` unloads the
+//     ~60 MB net and releases the lifetime slot, and the next `rk_create`
+//     reloads the net from disk. A failed startup whose engine thread could
+//     not be joined poisons the slot for the rest of the process.
 //   * `rk_destroy` sends "quit", joins the engine thread, and frees all memory.
 //     After it returns no further callbacks can fire.
 //
@@ -31,9 +34,10 @@ extern "C" {
 ///
 /// CONTRACT for direct CReckless consumers (the Swift `RecklessEngine` wrapper
 /// upholds all of this internally, so Swift API users need not care):
-///   * At most ONE engine is live per process, and the pinned fork supports only
-///     one successful engine LIFETIME per process (a later `rk_create` returns
-///     NULL rather than restarting).
+///   * At most ONE engine is live at a time (an overlapping `rk_create`
+///     returns NULL). Sequential lifetimes are supported: after a clean
+///     `rk_destroy`, a later `rk_create` starts a fresh engine with a freshly
+///     loaded net.
 ///   * Call `rk_destroy` EXACTLY ONCE per non-NULL `rk_create`. A second
 ///     `rk_destroy` on the same handle is a double-free / use-after-free, and any
 ///     `rk_send_command` / `rk_set_output_callback` after `rk_destroy`
@@ -63,8 +67,8 @@ typedef void (*RKOutputCallback)(const char *line, const void *context);
 ///                  always required.)
 ///
 /// Returns a non-NULL handle on success, NULL if engine initialisation failed,
-/// another engine is live, or this process already completed an engine lifetime
-/// under the currently pinned non-restart-safe Reckless fork.
+/// another engine is live, or a previous failed startup left its engine
+/// thread unjoined (which poisons the process's engine slot).
 RKEngineRef rk_create(const char *network_path);
 
 /// Destroy the engine, joining its thread and freeing all resources.

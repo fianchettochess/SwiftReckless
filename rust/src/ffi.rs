@@ -104,12 +104,16 @@ unsafe impl Sync for EngineState {}
 // ── Process-wide engine lifecycle gate ───────────────────────────────────────
 
 struct LifecycleState {
+    /// True while an engine lifetime holds the process slot. Overlapping
+    /// engines are never safe (the NNUE net and lookup tables are
+    /// process-global). A CLEAN destroy releases the slot and a new engine
+    /// may start — the pinned fork (swiftreckless-v0.9.1+) Once-guards its
+    /// table initializers and supports net unload, so repeated lifetimes
+    /// are safe. The stuck-thread teardown path in rk_ffi_create
+    /// `mem::forget`s its lease instead, leaving `live` set forever: a
+    /// detached engine thread may still be running, so the process slot is
+    /// deliberately poisoned for the remainder of the process.
     live: bool,
-    /// The pinned Reckless fork's lookup::initialize() is not idempotent:
-    /// its second init_cuckoo() runs against populated tables and can loop
-    /// forever. Until that fork guards lookup + NNUE threat initialization
-    /// with std::sync::Once, one successful run_io lifetime is the safe limit.
-    has_started_once: bool,
 }
 
 struct LifecycleGate {
@@ -119,15 +123,11 @@ struct LifecycleGate {
 impl LifecycleGate {
     fn try_acquire(&'static self) -> Option<LifecycleLease> {
         let mut state = self.state.lock().unwrap();
-        if state.live || state.has_started_once {
+        if state.live {
             return None;
         }
         state.live = true;
         Some(LifecycleLease { gate: self })
-    }
-
-    fn mark_started(&self) {
-        self.state.lock().unwrap().has_started_once = true;
     }
 
     fn release(&self) {
@@ -138,21 +138,12 @@ impl LifecycleGate {
 fn lifecycle_gate() -> &'static LifecycleGate {
     static GATE: OnceLock<LifecycleGate> = OnceLock::new();
     GATE.get_or_init(|| LifecycleGate {
-        state: Mutex::new(LifecycleState {
-            live: false,
-            has_started_once: false,
-        }),
+        state: Mutex::new(LifecycleState { live: false }),
     })
 }
 
 struct LifecycleLease {
     gate: &'static LifecycleGate,
-}
-
-impl LifecycleLease {
-    fn mark_started(&self) {
-        self.gate.mark_started();
-    }
 }
 
 impl Drop for LifecycleLease {
@@ -273,15 +264,15 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
             return std::ptr::null_mut();
         }
     };
-    // Reject overlap and a second successful engine lifetime before touching
-    // the process-global tables. The latter is a fail-fast containment for the
-    // pinned fork's non-idempotent lookup initializer; see LifecycleState.
+    // Reject overlapping engine lifetimes before touching the process-global
+    // tables; see LifecycleState. After a clean rk_ffi_destroy the slot is
+    // released and a fresh lifetime may start (fork swiftreckless-v0.9.1+).
     let lifecycle_lease = match lifecycle_gate().try_acquire() {
         Some(lease) => lease,
         None => {
             eprintln!(
                 "[creckless] rk_ffi_create: engine lifetime unavailable; \
-                 the pinned Reckless fork currently supports one run per process"
+                 an engine is live (or a failed lifetime poisoned the process)"
             );
             return std::ptr::null_mut();
         }
@@ -383,15 +374,12 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
         Ok(handle) => handle,
         Err(error) => {
             eprintln!("[creckless] rk_ffi_create: failed to spawn engine thread: {error}");
+            // No engine thread exists; free the just-loaded net so the
+            // released lifetime leaves no residue.
+            reckless::nnue::unload_network();
             return std::ptr::null_mut();
         }
     };
-
-    // Once run_io has been spawned it may already have entered the pinned
-    // engine's non-idempotent process-global initialization, even if it exits
-    // before answering isready. Consume the one-lifetime slot immediately so
-    // an early startup failure can never make a second unsafe attempt.
-    lifecycle_lease.mark_started();
 
     if tx.send("isready".to_string()).is_err()
         || startup_ready_rx
@@ -403,12 +391,16 @@ pub unsafe extern "C" fn rk_ffi_create(network_path: *const c_char) -> *mut c_vo
         drop(tx);
         if engine_handle.is_finished() {
             let _ = engine_handle.join();
+            // Thread joined: no engine-owned thread can touch the net.
+            reckless::nnue::unload_network();
         } else {
             // Rust has no safe way to kill a stuck thread. Detach it so the C
             // caller receives NULL after the bounded timeout, and permanently
-            // consume the process lifecycle slot so no later engine can race
-            // the still-running initializer. Closing tx above lets a merely
-            // slow (not stuck) loop observe EOF and exit eventually.
+            // poison the process lifecycle slot (the forgotten lease keeps
+            // `live` set) so no later engine can race the still-running
+            // thread. The net is deliberately NOT unloaded here — the
+            // detached thread may still read it. Closing tx above lets a
+            // merely slow (not stuck) loop observe EOF and exit eventually.
             std::mem::forget(lifecycle_lease);
             drop(engine_handle);
         }
@@ -461,6 +453,14 @@ pub unsafe extern "C" fn rk_ffi_destroy(engine: *mut c_void) {
         let _ = handle.join();
         eprintln!("[creckless] destroy: engine thread joined");
     }
+
+    // ── Step 3b: free the ~60 MB NNUE net ────────────────────────────────────
+    // Safe exactly here: the engine thread is joined and its worker pool
+    // joins its threads on drop (fork swiftreckless-v0.9.1), so no
+    // engine-owned thread can still read the net. This returns the host
+    // process to its no-engine memory baseline; the next rk_ffi_create
+    // reloads the net from disk.
+    reckless::nnue::unload_network();
 
     // ── Step 4: Box drops here ────────────────────────────────────────────────
     eprintln!("[creckless] destroy: complete");

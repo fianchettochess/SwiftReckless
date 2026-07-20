@@ -231,10 +231,11 @@ struct RecklessOutputTests {
 // ─────────────────────────────────────────────────────────────────────────────
 // Suite 2 — Engine smoke (net-guarded; runs by default when the net is staged)
 // ─────────────────────────────────────────────────────────────────────────────
-// One test, one engine instance (the engine uses a process-wide output sink, so
-// concurrent engines would collide). Guarded on the gitignored dev net.
+// Serialized: at most one engine may be live at a time (overlap is rejected at
+// the FFI gate), so the engine tests must never run concurrently. Guarded on
+// the gitignored dev net.
 
-@Suite("RecklessEngine smoke")
+@Suite("RecklessEngine smoke", .serialized)
 struct RecklessEngineSmokeTests {
 
     /// The gitignored dev net at <package>/rust/networks/, if present.
@@ -338,5 +339,47 @@ struct RecklessEngineSmokeTests {
         engine.shutdown()
         engine.shutdown() // idempotent
         engine.send("isready") // safe no-op after teardown
+    }
+
+    // The restart contract (fork swiftreckless-v0.9.1): a clean shutdown
+    // joins the engine thread, unloads the ~60 MB net, and releases the
+    // process engine slot — so a SECOND full lifetime must work. This is the
+    // package-level guarantee the host app's background engine shed depends
+    // on (shed on background, respawn on demand).
+    @Test(
+        "second engine lifetime after shutdown: fresh handshake and search",
+        .enabled(
+            if: RecklessEngineSmokeTests.stagedNetDir != nil
+                && !RecklessEngineSmokeTests.isForcedSourceStubBuild,
+            "needs the gitignored dev net staged in rust/networks and a real (non-stub) engine link"
+        )
+    )
+    func restartAfterShutdown() async throws {
+        let netDir = try #require(Self.stagedNetDir)
+        guard let first = RecklessEngine(networkDirectory: netDir) else {
+            Issue.record("first RecklessEngine lifetime failed to start")
+            return
+        }
+        first.isReady()
+        #expect(await awaitLine(first, timeout: .seconds(10)) { $0 == "readyok" },
+                "first lifetime never answered readyok")
+        // shutdown() is synchronous through rk_destroy: it joins the engine
+        // thread before returning, so the slot is free when it returns.
+        first.shutdown()
+
+        guard let second = RecklessEngine(networkDirectory: netDir) else {
+            Issue.record("second RecklessEngine lifetime was rejected after a clean shutdown")
+            return
+        }
+        defer { second.shutdown() }
+        second.uci()
+        #expect(await awaitLine(second, timeout: .seconds(10)) { $0 == "uciok" },
+                "restarted engine never answered uciok")
+        second.isReady()
+        #expect(await awaitLine(second, timeout: .seconds(5)) { $0 == "readyok" },
+                "restarted engine never answered readyok")
+        second.send("go depth 1")
+        #expect(await awaitLine(second, timeout: .seconds(30)) { $0.hasPrefix("bestmove") },
+                "restarted engine never produced a bestmove")
     }
 }

@@ -30,6 +30,11 @@ struct Collector {
 }
 
 unsafe extern "C" fn collect_line(line: *const c_char, context: *const c_void) {
+    // NULL is the documented engine-exit sentinel (host-side EOF signal),
+    // fired from the engine thread during destroy — not a line.
+    if line.is_null() {
+        return;
+    }
     let s = unsafe { CStr::from_ptr(line) }
         .to_string_lossy()
         .to_string();
@@ -115,8 +120,7 @@ fn ffi_uci_isready_bestmove() {
     );
 
     // Overlap is rejected immediately rather than entering the process-global
-    // engine. The pinned fork also has a non-idempotent lookup initializer, so
-    // a restart after destroy is rejected until that fork adds a Once guard.
+    // engine — overlapping lifetimes are never safe (shared net + tables).
     let second_net = CString::new(NET_PATH).unwrap();
     let reject_started = Instant::now();
     let overlapping = unsafe { rk_ffi_create(second_net.as_ptr()) };
@@ -133,11 +137,43 @@ fn ffi_uci_isready_bestmove() {
         "rk_ffi_destroy hung"
     );
 
-    let restart_started = Instant::now();
+    // A clean destroy releases the lifecycle slot and unloads the net
+    // (fork swiftreckless-v0.9.1): a SECOND full lifetime must work —
+    // create, handshake, search, destroy.
     let restart = unsafe { rk_ffi_create(second_net.as_ptr()) };
     assert!(
-        restart.is_null(),
-        "unsafe second engine lifetime was not rejected"
+        !restart.is_null(),
+        "restart after clean destroy was rejected"
     );
-    assert!(restart_started.elapsed() < Duration::from_secs(1));
+    let restart_collector = Arc::new(Collector {
+        lines: Mutex::new(Vec::new()),
+    });
+    let restart_ctx = Arc::as_ptr(&restart_collector) as *const c_void;
+    unsafe { rk_ffi_set_output_callback(restart, Some(collect_line), restart_ctx) };
+    let isready2 = CString::new("isready").unwrap();
+    unsafe { rk_ffi_send_command(restart, isready2.as_ptr()) };
+    assert!(
+        wait_for(
+            &restart_collector,
+            |l| l.iter().any(|x| x == "readyok"),
+            Duration::from_secs(5)
+        ),
+        "restarted engine never answered readyok"
+    );
+    let go2 = CString::new("go depth 1").unwrap();
+    unsafe { rk_ffi_send_command(restart, go2.as_ptr()) };
+    assert!(
+        wait_for(
+            &restart_collector,
+            |l| l.iter().any(|x| x.starts_with("bestmove")),
+            Duration::from_secs(30)
+        ),
+        "restarted engine never produced a bestmove"
+    );
+    let t1 = Instant::now();
+    unsafe { rk_ffi_destroy(restart) };
+    assert!(
+        t1.elapsed() < Duration::from_secs(10),
+        "second rk_ffi_destroy hung"
+    );
 }
