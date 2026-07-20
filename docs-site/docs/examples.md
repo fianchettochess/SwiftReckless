@@ -3,6 +3,14 @@
 The following examples use only the public Swift API (`RecklessEngine` and
 `RecklessNetworkLoader`). All snippets assume `import SwiftReckless`.
 
+!!! warning "Use `cancellationSafeOutput` for sequential reads"
+    `output` is a single-consumer `AsyncStream` — breaking out of its loop ends it
+    permanently, so a later `for await` gets immediate EOF. Use
+    `cancellationSafeOutput` for sequential/restartable reads (as every example
+    below does); never consume both surfaces on one engine. `output` is only for
+    generic `UCIEngine` consumers that retain one long-lived subscription for the
+    engine's whole life.
+
 ## Setup: provision the net, create the engine, and handshake
 
 ```swift
@@ -29,8 +37,9 @@ func makeEngine() async throws -> RecklessEngine {
     }
 
     // 3. Handshake: uci → uciok → isready → readyok.
+    // cancellationSafeOutput survives the `break` below; `output` would not.
     engine.uci()
-    for await line in engine.output {
+    for await line in engine.cancellationSafeOutput {
         if line == "uciok"   { engine.isReady() }
         if line == "readyok" { break }
     }
@@ -44,7 +53,7 @@ func makeEngine() async throws -> RecklessEngine {
 func bestMove(for fen: String, depth: Int, engine: RecklessEngine) async -> String? {
     engine.setPosition(fen: fen)
     engine.go(depth: depth)
-    for await line in engine.output {
+    for await line in engine.cancellationSafeOutput {
         if line.hasPrefix("bestmove ") {
             return line.split(separator: " ").dropFirst().first.map(String.init)
         }
@@ -96,7 +105,7 @@ func parseInfo(_ line: String) -> Eval? {
 
 engine.setPosition(fen: "startpos", moves: ["e2e4", "e7e5"])
 engine.go(depth: 24)
-for await line in engine.output {
+for await line in engine.cancellationSafeOutput {
     if let eval = parseInfo(line) {
         let score = eval.scoreCp.map { "\($0)cp" } ?? "mate \(eval.mateIn ?? 0)"
         print("depth \(eval.depth)  score \(score)  pv \(eval.pv.prefix(5).joined(separator: " "))")
@@ -116,7 +125,7 @@ try await Task.sleep(for: .seconds(5))
 engine.stop()
 
 // Collect the bestmove after stop.
-for await line in engine.output {
+for await line in engine.cancellationSafeOutput {
     if line.hasPrefix("bestmove ") {
         print("Stopped at:", line)
         break
@@ -130,7 +139,7 @@ for await line in engine.output {
 // White has 2 minutes, Black has 1 minute 55 seconds, 2s increment each.
 engine.setPosition(fen: "startpos", moves: ["e2e4", "e7e5", "g1f3"])
 engine.go(wtime: 120_000, btime: 115_000, winc: 2_000, binc: 2_000)
-for await line in engine.output {
+for await line in engine.cancellationSafeOutput {
     if line.hasPrefix("bestmove ") {
         print(line)
         break
@@ -147,7 +156,7 @@ engine.go(depth: 18)
 
 var candidates: [Int: String] = [:]   // multipv index → first pv move
 
-for await line in engine.output {
+for await line in engine.cancellationSafeOutput {
     if line.hasPrefix("info "),
        let idxRange = line.range(of: "multipv ") {
         let idxStr = line[idxRange.upperBound...].prefix { $0.isNumber }

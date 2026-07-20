@@ -62,20 +62,29 @@ guard let engine = RecklessEngine(networkDirectory: netDir) else {
 
 ## 3. Read output and send commands
 
-`engine.output` is an `AsyncStream<String>` of UCI lines, delivered in order, with
-no trailing newline. Read it from a `Task` while sending commands from any context.
+`engine.cancellationSafeOutput` is a cancellation-safe channel of UCI lines,
+delivered in order, with no trailing newline. Breaking out of one `for await` loop
+leaves the channel reusable for later reads — which is exactly what the sequential
+steps below rely on. Output is buffered, so it is safe to send a command first and
+start reading afterwards.
 
 ```swift
-Task {
-    for await line in engine.output {
-        print("engine>", line)
-        if line == "uciok"   { engine.isReady() }
-        if line == "readyok" { break }   // engine is ready; proceed below
-    }
-}
-
 engine.uci()   // sends "uci"; engine replies with id/option lines then "uciok"
+
+for await line in engine.cancellationSafeOutput {
+    print("engine>", line)
+    if line == "uciok"   { engine.isReady() }
+    if line == "readyok" { break }   // engine is ready; proceed below
+}
 ```
+
+!!! warning "`output` is single-consumer — pick one surface per engine"
+    `engine.output` (an `AsyncStream<String>`) is a compatibility shim for the
+    shared `UCIEngine` protocol. It is single-consumer and non-restartable:
+    breaking out of its loop ends it permanently, and even a first access starts a
+    forwarding consumer that competes with `cancellationSafeOutput` for lines. Use
+    `cancellationSafeOutput` for stop-and-resume reads like the ones on this page,
+    and never consume both surfaces on one engine.
 
 ## 4. Run a search
 
@@ -86,7 +95,7 @@ Once `readyok` is received, set a position and start a search. The engine emits
 engine.setPosition(fen: "startpos")
 engine.go(depth: 20)
 
-for await line in engine.output {
+for await line in engine.cancellationSafeOutput {
     if line.hasPrefix("bestmove ") {
         let move = line.split(separator: " ").dropFirst().first.map(String.init)
         print("Best move:", move ?? "none")
@@ -123,7 +132,7 @@ import SwiftReckless
 
         // 3. Handshake then search.
         engine.uci()
-        for await line in engine.output {
+        for await line in engine.cancellationSafeOutput {
             if line == "uciok"   { engine.isReady() }
             if line == "readyok" {
                 engine.setPosition(fen: "startpos")
@@ -144,6 +153,12 @@ import SwiftReckless
 ```swift
 public final class RecklessEngine: @unchecked Sendable {
     public init?(networkDirectory: URL)
+    /// Cancellation-safe, process-lifetime UCI output. Prefer this surface for
+    /// any consumer that stops and restarts reads.
+    public var cancellationSafeOutput: RecklessOutput { get }
+    /// Compatibility shim for the shared `UCIEngine` protocol; single-consumer
+    /// and non-restartable. Mutually exclusive with `cancellationSafeOutput` —
+    /// pick one surface per engine.
     public var output: AsyncStream<String> { get }
     public func send(_ command: String)
     public func uci()

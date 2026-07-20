@@ -90,9 +90,13 @@ build step.
 ```bash
 swift build
 swift run reckless-smoke    # drives uci → uciok → go depth 1 → bestmove
-swift test                  # offline loader suite (net-guarded live engine smoke)
+swift test                  # 4 suites: loader offline + output-cancellation + hermetic download/cancellation, plus the net-guarded live engine smoke
 ```
 
 The default `swift test` run never touches the network. The live engine smoke test
-is gated on the net being staged on disk at `rust/networks/`; present → it runs,
-absent → it skips and passes.
+is gated on the net being staged on disk at `rust/networks/`: present → it runs,
+absent → a RECORDED skip (visible in the test log, never a silent pass). It also
+skips on the forced-source macOS arm (`SWIFTRECKLESS_FORCE_SOURCE_BUILD=1`), which
+links no-op host stubs rather than the real engine. There is no
+`SWIFTRECKLESS_INTEGRATION` env var or separate integration target — gating is by
+net presence at `rust/networks/` plus not being a forced-source stub build.

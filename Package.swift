@@ -94,16 +94,18 @@ if useBinaryEngine {
 let engineTargets: [Target]
 if useBinaryEngine {
     // APPLE PATH: link the prebuilt xcframework + compile the thin C bridge.
-    // TODO: replace the `path:` binaryTarget with `url:` + `checksum:` at
-    // release time (same pattern as SwiftStockfish).
+    // At release time the Release workflow rewrites this `path:` binaryTarget
+    // to `url:` + `checksum:` on the tagged commit (same pattern as
+    // SwiftStockfish); `main` stays path-based.
     engineTargets = [
         .binaryTarget(
             name: "RecklessFFI",
-            // Built on-demand by Tools/build-xcframework.sh; GITIGNORED, never
-            // committed. The xcframework carries the full Apple gamut (10
-            // slices): iOS, iOS-sim, macOS, Mac Catalyst, tvOS (+sim), watchOS
-            // (+sim), visionOS (+sim). tvOS/watchOS/visionOS are Rust Tier-3,
-            // built with a nightly toolchain + `-Z build-std`.
+            // COMMITTED to main (10 slices, ~150 MB, plain git — see the header
+            // note); rebuilt on-demand by Tools/build-xcframework.sh only when
+            // the Rust engine changes. The xcframework carries the full Apple
+            // gamut (10 slices): iOS, iOS-sim, macOS, Mac Catalyst, tvOS
+            // (+sim), watchOS (+sim), visionOS (+sim). tvOS/watchOS/visionOS
+            // are Rust Tier-3, built with a nightly toolchain + `-Z build-std`.
             path: "Frameworks/RecklessFFI.xcframework"
         ),
         .target(
