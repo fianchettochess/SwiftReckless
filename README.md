@@ -396,10 +396,12 @@ version. Existing versions are never re-cut or force-moved. The workflow rejects
 versions outside the `.upstream-version`-derived `0.9.x` wrapper line, existing
 tags, and existing releases. It rebuilds and inspects all XCFramework slices, stages
 and verifies the NNUE network, and runs both locked Rust tests and the live Swift
-engine suite against that artifact's macOS arm64 slice. Trusted Intel CI
-separately live-tests the committed AVX2/BMI2 x86_64 slice. The release job uses
-`macos-26` with Xcode 26.6, then archives and byte-verifies the asset,
-creates the URL-based manifest commit on a detached
+engine suite against that artifact's macOS x86_64 slice. The release job runs on
+the trusted self-hosted Intel Mac Pro, pins `/Applications/Xcode.app`, refuses
+any Xcode version other than 26.6, and verifies AVX2/BMI2/POPCNT before building.
+ARM slices are cross-built and architecture/deployment-validated; Xcode Cloud
+will provide arm64 runtime coverage once enabled. The workflow then archives
+and byte-verifies the asset, creates the URL-based manifest commit on a detached
 HEAD, and uploads/re-downloads the asset through a draft release before
 publishing. The final tag is created once; `main` remains path-based.
 

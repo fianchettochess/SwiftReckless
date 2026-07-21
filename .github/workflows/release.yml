@@ -23,16 +23,22 @@ permissions:
 env:
   VERSION: ${{ inputs.version }}
   ASSET: RecklessFFI.xcframework.zip
+  DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
 jobs:
   release:
-    runs-on: macos-26
+    # Manual dispatch checks out only the current default-branch head, so fork
+    # pull requests never execute code on this persistent release machine.
+    runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 240
     steps:
       - name: Checkout default-branch source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # The runner account owns its workspace; avoid importing its global
+          # Git configuration solely to add a safe-directory exception.
+          set-safe-directory: false
 
       - name: Validate version, source revision, and collisions
         env:
@@ -81,10 +87,19 @@ jobs:
             exit 1
           fi
 
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
-        with:
-          xcode-version: '26.6'
+      - name: Verify pinned self-hosted toolchain and CPU
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = 'x86_64'
+          test -d "${DEVELOPER_DIR}"
+          test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 26.6'
+          xcodebuild -version
+
+          LEAF7_FEATURES="$(sysctl -n machdep.cpu.leaf7_features)"
+          BASE_FEATURES="$(sysctl -n machdep.cpu.features)"
+          grep -qw AVX2 <<< "${LEAF7_FEATURES}"
+          grep -qw BMI2 <<< "${LEAF7_FEATURES}"
+          grep -qw POPCNT <<< "${BASE_FEATURES}"
 
       - name: Build exact XCFramework
         run: |
