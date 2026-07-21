@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: cargo test
         run: cargo test --manifest-path rust/Cargo.toml --locked
 
@@ -46,7 +46,7 @@ jobs:
     # Exercise the package's declared minimum tools version, not a floating SDK.
     container: swift:6.0.3-jammy
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: swift build
         run: swift build
       - name: swift test
@@ -76,7 +76,7 @@ jobs:
       # artifact is validated by the Release workflow.
       SWIFTRECKLESS_FORCE_SOURCE_BUILD: '1'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The trusted runner owns its workspace; avoid copying its account's
           # global .gitconfig into the Actions log for safe-directory setup.
