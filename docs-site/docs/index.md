@@ -30,10 +30,9 @@ either engine with minimal changes.
 
 !!! warning "One engine per process"
     The Rust engine owns process-global state (lookup tables, NNUE weights). Only one
-    `RecklessEngine` may be alive in a process at a time. Create, use, and fully
-    shut down at most one engine: the currently pinned fork allows only one
-    successful engine lifetime per process — a later `RecklessEngine(networkDirectory:)`
-    returns `nil` rather than hanging.
+    `RecklessEngine` may be alive in a process at a time. Sequential lifetimes are
+    supported: fully shut down the current engine before creating another one.
+    An overlapping `RecklessEngine(networkDirectory:)` returns `nil`.
 
 ## Quick start
 

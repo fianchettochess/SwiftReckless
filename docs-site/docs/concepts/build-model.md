@@ -34,7 +34,6 @@ it automatically via the `url:` + `checksum:` binary target.
 ### macOS only (development)
 
 ```bash
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
 bash Tools/build-macos.sh
 # → Frameworks/RecklessFFI.xcframework  (macOS fat slice)
 swift build   # binary arm links the freshly built xcframework
@@ -47,9 +46,10 @@ bash Tools/build-xcframework.sh
 # → Frameworks/RecklessFFI.xcframework  (10 slices: iOS + macOS + Mac Catalyst + tvOS + watchOS + visionOS)
 ```
 
-The script installs the rustup targets it needs automatically. Tier-3 platforms
-(tvOS / watchOS / visionOS) are built via `-Z build-std` on a nightly toolchain +
-`rust-src` — no manual `rustup target add` is required.
+The script installs its pinned stable 1.96.1 targets automatically. Tier-3
+platforms (tvOS / watchOS / visionOS) use `nightly-2026-07-21` + `rust-src` and
+`-Z build-std`. Those exact toolchains produced the committed artifact; no
+manual `rustup target add` is required.
 
 ## Per-arch SIMD flags
 
@@ -59,15 +59,21 @@ flags directly activate Reckless's vectorised NNUE accumulator path:
 | Arch | Flags | Rationale |
 |---|---|---|
 | `aarch64-apple-*` | `+neon` | Always present on ARMv8-A; activates vectorised NNUE |
-| `x86_64-apple-*` | `+avx2,+bmi2,+popcnt` | Present on all Intel Macs (Haswell 2013+) and Rosetta simulator |
+| `x86_64-apple-*` | `+avx2,+bmi2,+popcnt` | Optimized build; requires Haswell-class hardware or newer |
+| `arm64_32-apple-watchos` | `+neon` | Physical Apple Watch architecture used before watchOS 26 |
 | `armv7-linux-androideabi` | `+neon,+vfpv3` | Present on all Android 5.0+ ARMv7 devices |
-| `x86_64-linux-android` | `+avx2,+popcnt` | Safe for x86_64 Android emulators |
-| `i686-linux-android` | `+sse4.2,+popcnt` | Conservative 32-bit x86 baseline |
+| `x86_64-linux-android` | `+avx2,+popcnt` | Requires AVX2 hardware |
+| `i686-linux-android` | `+sse4.2,+popcnt` | Requires SSE4.2 + POPCNT |
 
 Reckless selects the vectorised vs. scalar NNUE path at compile time via
 `#[cfg(target_feature = "…")]`. The xcframework carries per-arch slices with their
 SIMD code already baked in, so consuming Swift packages inherit the optimal path per
 device without any SPM-level arch flags.
+
+The x86_64 Apple binary intentionally preserves the AVX2/BMI2 performance
+uplift. Reckless has no runtime SIMD dispatch, so older Intel CPUs need a
+separate baseline build; the prebuilt product requires Haswell-class hardware
+or newer even though the operating-system deployment floor remains macOS 10.15.
 
 ## Android / Skip (SkipFuse) build
 
@@ -77,15 +83,10 @@ Android ABI, then point SPM at the target slice.
 ### Rust toolchain prerequisites
 
 ```bash
-# Install rustup targets
-rustup target add \
-  aarch64-linux-android \
-  armv7-linux-androideabi \
-  x86_64-linux-android \
-  i686-linux-android
+# Tools/build-android.sh installs pinned Rust 1.96.1 and its Android targets.
 
 # cargo-ndk (cross-compile helper)
-cargo install cargo-ndk
+cargo install cargo-ndk --version 4.1.2 --locked
 
 # NDK r26+ via Android Studio SDK Manager or brew
 export ANDROID_NDK_ROOT=~/Library/Android/sdk/ndk/<version>
@@ -106,20 +107,19 @@ SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 \
   swift build --swift-sdk aarch64-android
 ```
 
-### Gradle: package the staticlib as jniLibs
+### Link the static archive
 
-```groovy
-// app/build.gradle (or the equivalent Skip module):
-android {
-    sourceSets.main.jniLibs.srcDirs += ['<path-to-SwiftReckless>/android-libs']
-}
-```
+`libcreckless.a` is a link-time input, not a JNI runtime library. SwiftPM links
+the single slice named by `RECKLESS_LIB_DIR` into the final native output. Do not
+put the archive in Gradle `jniLibs`; Android loads `.so` files from that directory,
+not `.a` archives. If the surrounding Skip/native build produces a shared
+library, package that final `.so` instead.
 
-Note the two distinct consumers of `libcreckless.a`:
-
-- **SwiftPM** links the single slice named by `RECKLESS_LIB_DIR` at build time.
-- **Gradle** packages `android-libs/{abi}/libcreckless.a` into the APK's `jniLibs`
-  for on-device loading.
+The source arm currently passes the archive path through a conditional SwiftPM
+`.unsafeFlags` linker setting. It supports this local cross-build, but active
+unsafe flags can make a version-pinned remote dependency ineligible. Remote
+Android consumption remains pending a different linkage mechanism and an
+end-to-end remote-consumer test.
 
 ## `RecklessHostStubs.c`
 
@@ -131,7 +131,8 @@ links cleanly without an Android NDK.
 ## The Reckless fork
 
 The Rust dependency is `github.com/fianchettochess/Reckless.git`, pinned to
-tag `swiftreckless-v0.9.0` (commit `420b3d7`) (`default-features = false`). The fork makes four patches to the
+tag `swiftreckless-v0.9.1` (commit `de35beac9074137e9776af14859bf6f40562553c`)
+(`default-features = false`). The fork makes five patches to the
 upstream `codedeliveryservice/Reckless` at tag `v0.9.0`:
 
 1. Adds a `[lib]` target (upstream Reckless is binary-only; it has no library target
@@ -139,10 +140,13 @@ upstream `codedeliveryservice/Reckless` at tag `v0.9.0`:
 2. Replaces the compile-time `include_bytes!` NNUE embed with runtime loading
    (the path is passed to `rk_ffi_create`), enabling runtime net provisioning and
    net upgrades without a Rust rebuild.
-3. Adds per-instance I/O so concurrent engine instances do not share a process-wide
-   UCI input/output channel.
+3. Adds per-instance I/O so an engine lifetime does not use a process-wide UCI
+   input/output channel. The engine still owns other process-global state, so
+   overlapping instances remain prohibited.
 4. Guards terminal positions with no legal root move and emits `bestmove (none)`
    instead of aborting.
+5. Makes sequential engine lifetimes safe by guarding global initialization,
+   joining the worker pool, and allowing the NNUE network to be unloaded.
 
 With `default-features = false`, the effective transitive dependency is just `libc`.
 

@@ -17,9 +17,10 @@ be adapted to either engine with minimal changes.
 > restartable engine lifetimes — the host can shed and respawn the engine, freeing
 > the ~63 MB net between lifetimes); each release publishes `RecklessFFI.xcframework`
 > as a `url:` + `checksum:` asset while `main` stays path-based with the prebuilt
-> xcframework **committed**. CI builds + tests the source arm on Linux and macOS for
-> every push/PR and validates the real engine (binary arm, staged net) on release
-> tags. Consumed by the Fianchetto app (iOS and Android). The `RecklessEngine` API
+> xcframework **committed**. CI builds + tests both package arms on trusted pushes;
+> the manual Release workflow rebuilds the binary, stages the net, and validates
+> the real Rust/Swift engine before publishing. Consumed by the Fianchetto app
+> (iOS and Android). The `RecklessEngine` API
 > works end-to-end (verified: `swift test` runs a live
 > `uci → uciok / isready → readyok / go → bestmove` handshake when the net is
 > staged). The engine is a pinned git dependency on a maintained fork (see
@@ -35,6 +36,10 @@ Add **SwiftReckless** with Swift Package Manager:
 ```swift
 .package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.8")
 ```
+
+The prebuilt Apple x86_64 slices intentionally retain AVX2/BMI2 performance
+and require a Haswell-class Intel CPU or newer. Reckless does not runtime-
+dispatch this binary to a baseline implementation on older Intel hardware.
 
 ---
 
@@ -72,7 +77,7 @@ SwiftReckless/
 │   └── tests/
 │       └── ffi_smoke.rs                # cargo-test C-ABI regression (net-guarded)
 ├── Frameworks/                        # RecklessFFI.xcframework — COMMITTED (path-based main; rebuild only when the Rust changes)
-├── .github/workflows/                 # ci.yml (push/PR/tag), release.yml (url+checksum tag rewrite), upstream-watch.yml (daily notify-only)
+├── .github/workflows/                 # ci.yml (push/PR), release.yml (tested draft release + one-time tag), upstream-watch.yml (daily notify-only)
 ├── docs-site/                         # MkDocs documentation site
 └── Tools/
     ├── build-macos.sh                 # macOS fat lib → xcframework
@@ -117,15 +122,11 @@ further callbacks can fire.
 I/O is **per-instance**: each engine owns its own channel and callback, with **no
 stdout/fd redirection** (a deliberate change from an earlier stdout-hijack spike).
 The Rust FFI enforces **one live engine per process** with a lifecycle gate,
-because the engine owns process-global tables / NNUE weights. It currently also
-allows only **one successful engine lifetime per process**: pinned fork revision
-`420b3d7` reruns `lookup::initialize()` on a restart, and its second
-`init_cuckoo()` can loop forever against the already-populated global table. The
-wrapper therefore rejects overlap and later creates with `NULL` instead of
-hanging. Removing this temporary containment requires guarding the fork's
-`lookup::initialize()` (and NNUE threat-table initialization) with
-`std::sync::Once`, bumping the pinned revision, rebuilding the xcframework, and
-then changing the FFI regression to expect a successful second lifetime.
+because the engine owns process-global tables / NNUE weights. Sequential
+lifetimes are supported by fork tag `swiftreckless-v0.9.1`: a clean
+`rk_destroy` joins the worker pool, unloads the NNUE network, and releases the
+lifecycle slot so a later `rk_create` can start a fresh engine. Overlapping
+lifetimes are still rejected with `NULL`.
 
 ---
 
@@ -149,8 +150,9 @@ then changing the FFI regression to expect a successful second lifetime.
 
 The prebuilt `xcframework` is **committed** to `main` (a path-based binary target),
 so a fresh clone links with a plain `swift build` on Apple — no rebuild needed.
-Rebuild it (see below) only when the Rust engine changes; the release tag rewrites
-the binary target to `url:` + `checksum:` so the tag itself stays lean.
+Rebuild it (see below) only when the Rust engine changes; the manual release
+workflow creates a detached tag commit whose binary target uses `url:` +
+`checksum:`, so the tag itself stays lean without mutating `main`.
 
 Quick sanity check:
 
@@ -167,7 +169,6 @@ swift test                  # 4 suites: loader offline + output-cancellation + h
 ### macOS (development)
 
 ```bash
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
 bash Tools/build-macos.sh   # produces Frameworks/RecklessFFI.xcframework
 swift build                 # binary arm links the freshly built xcframework
 ```
@@ -179,20 +180,22 @@ bash Tools/build-xcframework.sh
 # → Frameworks/RecklessFFI.xcframework  (10 slices — the full Apple gamut)
 ```
 
-The script installs the rustup targets it needs, plus a nightly toolchain +
-`rust-src` for the Rust Tier-3 platforms (tvOS/watchOS/visionOS), which it builds
-from source via `-Z build-std`. No manual `rustup target add` is required. This
-is the same xcframework the release CI publishes as a `url:` asset.
+The script installs the pinned stable 1.96.1 targets plus
+`nightly-2026-07-21` + `rust-src` for the Rust Tier-3 platforms
+(tvOS/watchOS/visionOS), which it builds from source via `-Z build-std`. No
+manual `rustup target add` is required. These pins produced the committed
+xcframework and are also used by release CI.
 
 **Per-arch SIMD flags** (baked into the build scripts):
 
 | Arch | Flags | Rationale |
 |---|---|---|
 | `aarch64-*` | `+neon` | Always present on ARMv8-A; activates Reckless's vectorised NNUE accumulator |
-| `x86_64-apple-*` | `+avx2,+bmi2,+popcnt` | Present on all Intel Macs (Haswell 2013+) and Rosetta simulator |
+| `x86_64-apple-*` | `+avx2,+bmi2,+popcnt` | Optimized Intel build; requires Haswell-class AVX2/BMI2 hardware or newer |
+| `arm64_32-apple-watchos` | `+neon` | Physical Apple Watch architecture used before watchOS 26 |
 | `armv7-linux-androideabi` | `+neon,+vfpv3` | Present on all Android 5.0+ ARMv7 devices |
-| `x86_64-linux-android` | `+avx2,+popcnt` | Safe for x86_64 Android emulators |
-| `i686-linux-android` | `+sse4.2,+popcnt` | Conservative 32-bit x86 baseline |
+| `x86_64-linux-android` | `+avx2,+popcnt` | Optimized emulator/device build; requires AVX2 hardware |
+| `i686-linux-android` | `+sse4.2,+popcnt` | Requires SSE4.2 + POPCNT |
 
 Reckless selects the vectorised vs scalar NNUE path at compile time via
 `#[cfg(target_feature = "…")]`, so these flags directly activate the fast path. The
@@ -201,6 +204,11 @@ consuming Swift package inherits the optimal path per device with no per-arch fl
 the SPM level (same design as the Stockfish xcframework in
 [SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish)).
 
+> **Intel CPU requirement:** the prebuilt x86_64 slices intentionally favor
+> engine strength and require AVX2, BMI2, and POPCNT (Haswell-class or newer).
+> Reckless has no runtime SIMD dispatch. Supporting older Intel hardware would
+> require a separate baseline product or upstream multiversion dispatch.
+
 ### Android / Skip (SkipFuse)
 
 The Android build uses the **source arm**. Cross-build the staticlib, then point SPM at
@@ -208,16 +216,11 @@ it with `RECKLESS_LIB_DIR`:
 
 ```bash
 # Prerequisites
-rustup target add \
-  aarch64-linux-android \
-  armv7-linux-androideabi \
-  x86_64-linux-android \
-  i686-linux-android
-cargo install cargo-ndk
+cargo install cargo-ndk --version 4.1.2 --locked
 # NDK r26+ installed; set ANDROID_NDK_ROOT.
 
 bash Tools/build-android.sh
-# → android-libs/{arm64-v8a,armeabi-v7a,x86_64,x86}/libcreckless.a  (for Gradle jniLibs packaging)
+# → android-libs/{arm64-v8a,armeabi-v7a,x86_64,x86}/libcreckless.a
 
 # Build the Swift package against a specific slice:
 RECKLESS_LIB_DIR=rust/target/aarch64-linux-android/release \
@@ -225,22 +228,20 @@ SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 \
   swift build --swift-sdk aarch64-android
 ```
 
-Note the two distinct consumers of the `.a`:
-- **SwiftPM** links the single slice named by `RECKLESS_LIB_DIR` (default the
-  host `rust/target/release`) at build time — the Android example above sets it
-  to the `aarch64-linux-android` slice.
-- **Gradle** packages `android-libs/{abi}/libcreckless.a` into the APK's `jniLibs`
-  for on-device loading:
+`libcreckless.a` is a **static link input**. SwiftPM links the single slice named
+by `RECKLESS_LIB_DIR` (the example selects `aarch64-linux-android`) into the final
+native output. Do not put these archives in Gradle `jniLibs`: that directory is
+for loadable `.so` libraries, and Android cannot load a `.a` at runtime. If the
+surrounding Skip/native build emits a `.so`, package that final shared library.
 
-```groovy
-// In app/build.gradle (or the equivalent Skip module):
-android {
-    sourceSets.main.jniLibs.srcDirs += ['<path-to-SwiftReckless>/android-libs']
-}
-```
+The Android source arm currently supplies the archive path through a conditional
+SwiftPM `.unsafeFlags` linker setting. That works for the local/cross-build flow
+above, but SwiftPM can reject active unsafe flags when this package is consumed as
+a version-pinned remote dependency. Treat remote Android consumption as pending
+until the linkage is replaced and covered by an end-to-end remote-consumer test.
 
 The Skip/SkipFuse bridge pattern (`/* SKIP @bridge */` + SwiftJNI `callStatic`)
-documented in the Fianchetto memory files applies unchanged. Generic consumers
+used by the consuming application applies unchanged. Generic consumers
 can use the Stockfish-compatible `send(_:)` / `output` surface, but must retain
 one long-lived `output` subscription. Concrete consumers that cancel and restart
 reads on the same process-lifetime engine must use `cancellationSafeOutput`;
@@ -253,7 +254,7 @@ cancelling one of its waiters does not finish output for later searches.
 | Property | Value |
 |---|---|
 | Upstream repo | https://github.com/codedeliveryservice/Reckless |
-| Dependency actually used | Maintained fork **`github.com/fianchettochess/Reckless.git`**, pinned tag `swiftreckless-v0.9.0` (commit `420b3d7`), `default-features = false` (branch `swiftreckless` on upstream tag `v0.9.0`; four patches: a `[lib]` target, runtime NNUE loading, per-instance I/O, and terminal-position guarding) |
+| Dependency actually used | Maintained fork **`github.com/fianchettochess/Reckless.git`**, pinned tag `swiftreckless-v0.9.1` (commit `de35beac9074137e9776af14859bf6f40562553c`), `default-features = false` (branch `swiftreckless` on upstream tag `v0.9.0`; five patches: a `[lib]` target, runtime NNUE loading, per-instance I/O, terminal-position guarding, and restart-safe lifecycle cleanup) |
 | Language | Rust |
 | License | **AGPL-3.0** |
 | Protocol | UCI (`run_io` implements the message loop) |
@@ -278,8 +279,7 @@ service's users the Corresponding Source of your modified version.
 ## NNUE weight provisioning
 
 The network (`v54-5478683c.nnue`) is **NEVER committed** to this repo or to any
-Fianchetto repo (`.gitignore` bans `*.nnue` and `networks/`). Policy mirrors the
-`.nnue` ban in the Fianchetto memory files.
+Fianchetto repo (`.gitignore` bans `*.nnue` and `networks/`).
 
 Runtime strategy (same as Stockfish nets in
 [SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish)):
@@ -300,22 +300,14 @@ Runtime strategy (same as Stockfish nets in
 
 ```bash
 # Rust — use rustup (NOT `brew install rust`, which is not rustup-managed and
-# cannot `rustup target add` the cross-compile targets below).
+# cannot install the pinned/cross-compile toolchains below).
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup component add rust-src
 
-# Apple targets
-rustup target add \
-  aarch64-apple-darwin x86_64-apple-darwin \
-  aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
-
-# Android targets
-rustup target add \
-  aarch64-linux-android armv7-linux-androideabi \
-  x86_64-linux-android i686-linux-android
+# Tools/build-*.sh installs stable 1.96.1 and its required targets.
+# The full Apple builder additionally installs nightly-2026-07-21 + rust-src.
 
 # Android build tool
-cargo install cargo-ndk
+cargo install cargo-ndk --version 4.1.2 --locked
 
 # Android NDK (via Android Studio SDK Manager or brew)
 # Set: export ANDROID_NDK_ROOT=~/Library/Android/sdk/ndk/<version>
@@ -326,8 +318,8 @@ cargo install cargo-ndk
 ## Testing
 
 ```bash
-swift test          # Swift suites (see below)
-cd rust && cargo test   # Rust C-ABI regression (tests/ffi_smoke.rs)
+swift test                    # Swift suites (see below)
+cargo test --manifest-path rust/Cargo.toml --locked
 ```
 
 `Tests/SwiftRecklessTests` has four [swift-testing](https://github.com/apple/swift-testing) suites:
@@ -352,10 +344,25 @@ cd rust && cargo test   # Rust C-ABI regression (tests/ffi_smoke.rs)
 There is no `SWIFTRECKLESS_INTEGRATION` env var or separate integration target — gating
 is by net presence at `rust/networks/` plus not being a forced-source stub build.
 
+## Releasing
+
+Do not push or re-cut a version tag. In **Actions → Release binary → Run
+workflow**, choose the current default branch and enter a new stable `N.N.N` version. The
+workflow rejects existing tags/releases, rebuilds and inspects all XCFramework
+slices, stages and verifies the NNUE network, and runs both locked Rust tests and
+the live Swift engine suite against that artifact's macOS arm64 slice. Trusted
+Intel CI separately live-tests the committed AVX2/BMI2 x86_64 slice. The release
+job uses `macos-26` with Xcode 26.6, then archives and byte-verifies the asset,
+creates the URL-based manifest commit on a detached
+HEAD, and uploads/re-downloads the asset through a draft release before
+publishing. The final tag is created once; `main` remains path-based.
+
 ## License
 
 AGPL-3.0 — see [LICENSE](LICENSE) — matching the upstream
 [Reckless](https://github.com/codedeliveryservice/Reckless) engine this
-package builds from source. The bundled NNUE network comes from
-[RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks)
-under the same license.
+package builds from source. The runtime NNUE network is downloaded directly
+from [RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks)
+and is not redistributed in this repository. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency and network
+provenance.

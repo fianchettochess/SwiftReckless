@@ -52,13 +52,11 @@ guard let engine = RecklessEngine(networkDirectory: netDir) else {
 }
 ```
 
-!!! warning "One engine lifetime per process (temporary fork limitation)"
-    The Rust engine owns process-global state. Pinned fork revision `420b3d7`
-    also has a non-idempotent lookup initializer, so SwiftReckless currently
-    rejects overlap and any second engine lifetime with a `nil` initializer
-    result rather than risking a hang. A fork revision with `std::sync::Once`
-    around lookup/threat-table initialization plus an xcframework rebuild is
-    required before restart can be enabled safely.
+!!! warning "One live engine per process"
+    The Rust engine owns process-global state, so SwiftReckless rejects an
+    overlapping engine with a `nil` initializer result. Pinned fork tag
+    `swiftreckless-v0.9.1` makes initialization and teardown restart-safe:
+    after a clean `shutdown()`, a later engine lifetime may start normally.
 
 ## 3. Read output and send commands
 
