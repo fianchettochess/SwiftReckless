@@ -1,0 +1,81 @@
+name: Trusted macOS CI
+
+# Persistent self-hosted runners must never execute pull-request code. This
+# workflow exercises both package arms only after a push to main or an explicit
+# trusted manual dispatch. The Release workflow independently rebuilds and
+# validates the exact artifact it publishes.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trusted-macos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+
+jobs:
+  macos-self-hosted:
+    name: macOS — self-hosted (Intel Mac Pro, source and binary arms)
+    # SECURITY: Before public visibility, restrict the organization runner
+    # group to this exact workflow on refs/heads/main. These labels only route
+    # the job; they are not an authorization boundary.
+    runs-on: [self-hosted, macOS, X64]
+    timeout-minutes: 45
+    env:
+      # Force the source arm past the prebuilt RecklessFFI.xcframework
+      # (committed, ~150 MB — forced off here so this job exercises the
+      # stub/source arm). The binary arm is tested below, and a freshly rebuilt
+      # artifact is validated by the Release workflow.
+      SWIFTRECKLESS_FORCE_SOURCE_BUILD: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The trusted runner owns its workspace; avoid copying its account's
+          # global .gitconfig into the Actions log for safe-directory setup.
+          set-safe-directory: false
+          persist-credentials: false
+      - name: Verify pinned self-hosted toolchain and CPU
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = 'x86_64'
+          test -d "${DEVELOPER_DIR}"
+          test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 26.6'
+          test "$(xcodebuild -version | sed -n '2p')" = 'Build version 17F113'
+          test "$(xcrun swift --version | sed -n '1p')" = 'swift-driver version: 1.148.6 Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)'
+          xcodebuild -version
+          xcrun swift --version
+
+          LEAF7_FEATURES="$(sysctl -n machdep.cpu.leaf7_features)"
+          BASE_FEATURES="$(sysctl -n machdep.cpu.features)"
+          grep -qw AVX2 <<< "${LEAF7_FEATURES}"
+          grep -qw BMI2 <<< "${LEAF7_FEATURES}"
+          grep -qw POPCNT <<< "${BASE_FEATURES}"
+      - name: swift build
+        run: swift build
+      - name: swift test
+        # The NNUE-guarded live engine smoke test skips cleanly when the
+        # net file is absent (gitignored). All other tests run normally.
+        run: swift test
+      - name: Binary-arm live package tests
+        env:
+          SWIFTRECKLESS_FORCE_SOURCE_BUILD: ''
+        run: |
+          set -euo pipefail
+          NET='rust/networks/v54-5478683c.nnue'
+          PART="${NET}.ci-part"
+          mkdir -p rust/networks
+          trap 'rm -f "${NET}" "${PART}"' EXIT
+          curl -fsSL -o "${PART}" \
+            https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v54-5478683c.nnue
+          printf '%s  %s\n' \
+            '5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf' \
+            "${PART}" | shasum -a 256 -c -
+          mv "${PART}" "${NET}"
+          swift test --scratch-path .build-binary

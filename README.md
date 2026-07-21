@@ -18,9 +18,11 @@ adaptation.
 > **Release status.** The `0.9.x` wrapper line packages upstream Reckless `0.9`.
 > Wrapper-only releases increment the patch component. Release tags use a
 > URL-based `RecklessFFI.xcframework` with a checksum, while `main` keeps the prebuilt
-> XCFramework committed as a path-based target. CI builds and tests both package
-> arms on trusted pushes. The manual release workflow rebuilds the binary, stages
-> the network, and validates the live Rust and Swift engine before publication.
+> XCFramework committed as a path-based target. Hosted pull-request CI tests the
+> Rust FFI and Linux source arm; trusted macOS CI tests both package arms after a
+> push to `main` or an explicit manual dispatch. The manual release workflow
+> rebuilds the binary, stages the network, and validates the live Rust and Swift
+> engine before publication.
 > With the network staged, `swift test` verifies the complete
 > `uci → uciok / isready → readyok / go → bestmove` exchange. The Fianchetto app
 > consumes the package on iOS and Android. The engine remains a pinned Git
@@ -82,7 +84,11 @@ SwiftReckless/
 │   └── tests/
 │       └── ffi_smoke.rs                # cargo-test C-ABI regression (net-guarded)
 ├── Frameworks/                        # RecklessFFI.xcframework — committed (path-based main; rebuild only when Rust changes)
-├── .github/workflows/                 # ci.yml (push/PR), release.yml (tested draft release and one-time tag), upstream-watch.yml (daily notify-only)
+├── .github/workflows/
+│   ├── ci.yml                         # Hosted Rust/Linux CI (push/PR/manual)
+│   ├── ci-macos-trusted.yml           # Self-hosted macOS CI (main push/manual only)
+│   ├── release.yml                    # Tested draft release and one-time tag
+│   └── upstream-watch.yml             # Daily notify-only upstream check
 ├── docs-site/                         # MkDocs documentation site
 └── Tools/
     ├── build-macos.sh                 # macOS fat library → XCFramework
@@ -388,6 +394,14 @@ fixture in `Tests/RemoteConsumer` through a versioned `.package(url:)`
 dependency. This catches unsafe dependency settings that a root-package or
 local-path build would miss.
 
+The pull-request-capable `ci.yml` workflow uses GitHub-hosted runners only. The
+separate `ci-macos-trusted.yml` workflow runs the source- and binary-arm macOS
+tests on the self-hosted Intel runner only after a push to `main` or a trusted
+manual dispatch. Before public visibility, the organization runner group must
+restrict each self-hosted workflow to its exact workflow file on
+`refs/heads/main`; `runs-on` labels route jobs but are not an authorization
+boundary.
+
 ## Releasing
 
 Releases are produced by **Actions → Release binary → Run workflow**, not by
@@ -397,8 +411,9 @@ versions outside the `.upstream-version`-derived `0.9.x` wrapper line, existing
 tags, and existing releases. It rebuilds and inspects all XCFramework slices, stages
 and verifies the NNUE network, and runs both locked Rust tests and the live Swift
 engine suite against that artifact's macOS x86_64 slice. The release job runs on
-the trusted self-hosted Intel Mac Pro, pins `/Applications/Xcode.app`, refuses
-any Xcode version other than 26.6, and verifies AVX2/BMI2/POPCNT before building.
+the trusted self-hosted Intel Mac Pro, pins `/Applications/Xcode.app`, verifies
+the exact Xcode 26.6 build `17F113` and Swift 6.3.3 (`swift-driver` 1.148.6)
+toolchain, and checks AVX2/BMI2/POPCNT before building.
 ARM slices are cross-built and architecture/deployment-validated; Xcode Cloud
 will provide arm64 runtime coverage once enabled. The workflow then archives
 and byte-verifies the asset, creates the URL-based manifest commit on a detached

@@ -1,20 +1,15 @@
 name: CI
 
-# Build + test the SOURCE arm (host stubs) on Linux and macOS.
+# Hosted CI for the Rust FFI and Linux SOURCE arm (host stubs). This is the only
+# pull_request-capable workflow, so untrusted changes never run on a persistent
+# self-hosted machine. Trusted macOS source- and binary-arm coverage lives in
+# ci-macos-trusted.yml and runs only after a push to main or manual dispatch.
 #
-# SOURCE ARM rationale: the committed RecklessFFI.xcframework only serves
-# Apple hosts; the source arm (non-Apple host, or
-# SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 on macOS) compiles the thin C bridge +
-# RecklessHostStubs.c (no-op rk_ffi_* symbols), proving the package builds and
-# tests on Linux and on macOS without the binary engine.  The NNUE net is
-# gitignored, so the net-guarded engine smoke test records a skip.
-#
-# The BINARY arm (the real Rust engine via the committed xcframework) is tested
-# on each trusted macOS run. The Release workflow separately rebuilds it, stages
-# the NNUE network, and runs both Rust and Swift live-engine tests before publish.
-#
-# Runs on every push to `main`, every PR, and manual dispatch. Release tags are
-# created once by the manual Release workflow after its exact-artifact tests.
+# The Linux source arm compiles the thin C bridge + RecklessHostStubs.c (no-op
+# rk_ffi_* symbols), proving the package builds and tests without the binary
+# engine. The NNUE net is gitignored, so its live-engine smoke test records a
+# skip. The Release workflow separately rebuilds the exact binary, stages the
+# NNUE network, and runs both Rust and Swift live-engine tests before publish.
 
 on:
   workflow_dispatch:
@@ -62,50 +57,3 @@ jobs:
             swift run \
               --package-path Tests/RemoteConsumer \
               --scratch-path "${RUNNER_TEMP}/remote-consumer-build"
-
-  macos-self-hosted:
-    name: macOS — self-hosted (Intel Mac Pro, source arm)
-    # Never execute code from a fork on a persistent self-hosted machine.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, X64]
-    timeout-minutes: 45
-    env:
-      # Force the source arm past the prebuilt RecklessFFI.xcframework
-      # (committed, ~150 MB — forced off here so this job exercises the
-      # stub/source arm). The binary arm is tested below, and a freshly rebuilt
-      # artifact is validated by the Release workflow.
-      SWIFTRECKLESS_FORCE_SOURCE_BUILD: '1'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The trusted runner owns its workspace; avoid copying its account's
-          # global .gitconfig into the Actions log for safe-directory setup.
-          set-safe-directory: false
-          persist-credentials: false
-      - name: Verify optimized Intel CPU features
-        run: |
-          FEATURES="$(sysctl -n machdep.cpu.leaf7_features)"
-          grep -qw AVX2 <<< "${FEATURES}"
-          grep -qw BMI2 <<< "${FEATURES}"
-      - name: swift build
-        run: swift build
-      - name: swift test
-        # The NNUE-guarded live engine smoke test skips cleanly when the
-        # net file is absent (gitignored).  All other tests run normally.
-        run: swift test
-      - name: Binary-arm live package tests
-        env:
-          SWIFTRECKLESS_FORCE_SOURCE_BUILD: ''
-        run: |
-          set -euo pipefail
-          NET='rust/networks/v54-5478683c.nnue'
-          PART="${NET}.ci-part"
-          mkdir -p rust/networks
-          trap 'rm -f "${NET}" "${PART}"' EXIT
-          curl -fsSL -o "${PART}" \
-            https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v54-5478683c.nnue
-          printf '%s  %s\n' \
-            '5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf' \
-            "${PART}" | shasum -a 256 -c -
-          mv "${PART}" "${NET}"
-          swift test --scratch-path .build-binary
