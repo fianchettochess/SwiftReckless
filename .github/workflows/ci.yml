@@ -52,6 +52,7 @@ jobs:
       - name: swift test
         run: swift test
       - name: Versioned remote-consumer build
+        shell: bash
         run: |
           set -euo pipefail
           BARE_REPO="${RUNNER_TEMP}/SwiftReckless.git"
