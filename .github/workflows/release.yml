@@ -45,6 +45,14 @@ jobs:
             echo "::error::invalid version '${VERSION}' — expected stable N.N.N"
             exit 1
           fi
+          UPSTREAM="$(tr -d '\r\n' < .upstream-version)"
+          ENGINE_LINE="${UPSTREAM#v}"
+          IFS='.' read -r ENGINE_MAJOR ENGINE_MINOR _ <<< "${ENGINE_LINE}"
+          if ! printf '%s' "${VERSION}" | \
+            grep -Eq "^${ENGINE_MAJOR}\\.${ENGINE_MINOR}\\.[0-9]+$"; then
+            echo "::error::version '${VERSION}' must stay on the ${ENGINE_MAJOR}.${ENGINE_MINOR}.x wrapper line for upstream ${UPSTREAM}"
+            exit 1
+          fi
           git check-ref-format "refs/tags/${VERSION}"
           git fetch --no-tags origin "${DEFAULT_BRANCH}"
           if [ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/${DEFAULT_BRANCH}")" ]; then

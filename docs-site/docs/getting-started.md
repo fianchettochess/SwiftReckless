@@ -14,6 +14,7 @@ re-downloaded (it verifies the complete SHA-256 on Apple, Linux, and Android,
 then returns immediately). Only a missing or invalid file triggers a download.
 
 ```swift
+import Foundation
 import SwiftReckless
 
 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -112,6 +113,7 @@ engine.shutdown() // sends "quit", joins the Rust thread, frees state, finishes 
 ## Full minimal example
 
 ```swift
+import Foundation
 import SwiftReckless
 
 @main struct MinimalReckless {
@@ -175,5 +177,5 @@ public final class RecklessEngine: @unchecked Sendable {
 
 - [Engine API](concepts/engine-api.md) — full reference for `RecklessEngine`.
 - [NNUE Network Loader](concepts/nnue-loader.md) — the loader in depth.
-- [Build model](concepts/build-model.md) — Apple xcframework vs. Android source build.
+- [Build model](concepts/build-model.md) — Apple XCFramework vs. Android source build.
 - [Usage Examples](examples.md) — task-oriented code samples.

@@ -6,11 +6,12 @@ version 3** (AGPL-3.0).
 ## Why AGPL-3.0
 
 The Reckless chess engine is licensed AGPL-3.0. SwiftReckless links the engine's
-compiled code directly into its output — the `RecklessFFI.xcframework` on Apple
-platforms, or the source-built `libcreckless` static library on Android and other
-platforms. Because static linking incorporates the AGPL-3.0 work into the output,
-the whole SwiftReckless package is an AGPL-3.0 artifact, and any binary that
-includes SwiftReckless is governed by AGPL-3.0.
+compiled code directly into its output: the `RecklessFFI.xcframework` on Apple
+platforms and the source-built `libcreckless` static library on Android.
+Non-Android source-arm host stubs do not contain the engine. The SwiftReckless
+repository and distributed engine-bearing products are licensed under
+AGPL-3.0; applications incorporating them must evaluate the corresponding
+license obligations.
 
 ## Key AGPL-3.0 obligations
 
@@ -30,10 +31,10 @@ if you run a modified version of the covered work as part of a network-accessibl
 service (e.g. a chess server that evaluates positions using SwiftReckless), you must
 offer that service's users the Corresponding Source of your modified version.
 
-This obligation does not apply to unmodified versions running locally on a user's
-own device. A standard chess app distributed on the App Store that ships SwiftReckless
-unmodified and runs the engine locally is subject to the standard AGPL-3.0 source
-offer, not the network-interaction clause.
+The network-interaction clause concerns remote interaction with a modified
+covered version. Local, on-device distribution instead raises the AGPL's
+distribution obligations. Consult qualified counsel for a specific product or
+distribution channel.
 
 ## Compatibility with Stockfish (GPL-3.0)
 
@@ -43,7 +44,7 @@ that links both engines (if ever shipped) must offer the Corresponding Source fo
 both engines and must comply with AGPL-3.0 for the combined work.
 
 In Fianchetto, the two engines are never simultaneously linked into the same binary
-target — they are separate SPM products (`SwiftReckless` and `SwiftStockfish`) that
+target — they are separate SwiftPM products (`SwiftReckless` and `SwiftStockfish`) that
 a consuming target links individually.
 
 ## Reckless engine upstream
@@ -68,11 +69,10 @@ AGPL-3.0 text and is the authoritative license for the package.
 
 ## Practical guidance
 
-- **App Store distribution**: AGPL-3.0 does not prohibit App Store distribution,
-  but you must make the Corresponding Source available (e.g. via a public GitHub
-  repository or a written offer). Apple's standard App Store agreement is compatible
-  with distributing AGPL-3.0 software as long as source availability obligations are
-  met externally.
+- **App Store distribution**: Do not assume that source availability alone
+  resolves compatibility between AGPL-3.0 and a store's current terms, DRM, or
+  signing requirements. Review the current agreement and the license with
+  qualified counsel before distribution.
 - **Modifications**: If you modify SwiftReckless or the Reckless fork and distribute
   the resulting binary, you must publish those modifications under AGPL-3.0.
 - **Network services**: If you run a modified version behind a network API, AGPL §13

@@ -23,7 +23,7 @@ platform matrix and cross-compile details.
     dispatch this binary to a baseline implementation on older Intel hardware.
 
 !!! warning "AGPL-3.0"
-    SwiftReckless links the Reckless engine and is a **AGPL-3.0** work. Consuming it
+    SwiftReckless links the Reckless engine and is an **AGPL-3.0** work. Consuming it
     carries AGPL-3.0 obligations on your application. See
     [AGPL-3.0 licensing](concepts/agpl-licensing.md).
 
@@ -65,10 +65,10 @@ library product to your target.
     provision it at runtime via `RecklessNetworkLoader` before the engine can start.
     See [NNUE Network Loader](concepts/nnue-loader.md).
 
-## Apple xcframework
+## Apple XCFramework
 
 On Apple platforms the engine links a prebuilt `Frameworks/RecklessFFI.xcframework`.
-The xcframework is **committed** to `main` (a path-based binary target), so a fresh
+The XCFramework is **committed** to `main` (a path-based binary target), so a fresh
 clone links with a plain `swift build` on Apple — no rebuild needed. Rebuild it only
 when the Rust engine changes:
 
@@ -85,17 +85,25 @@ bash Tools/build-xcframework.sh
 ```
 
 The Rust toolchain prerequisites are documented in [Build model](concepts/build-model.md).
-The manual Release workflow builds and tests the exact xcframework, stages it in
+The manual release workflow builds and tests the exact XCFramework, stages it in
 a draft release, verifies the uploaded bytes, and creates the final tag once at a
-`url:` + `checksum:` manifest. Consuming a tagged version via SPM therefore needs
+`url:` + `checksum:` manifest. Consuming a tagged version via SwiftPM therefore needs
 no local Rust build.
 
 ## Verifying the install
 
 ```bash
 swift build
+swift test                  # Offline, cancellation, hermetic download, and net-guarded live suites
+
+# Optional live CLI smoke on the Apple binary arm: stage and verify the net first.
+mkdir -p rust/networks
+curl -fsSL -o rust/networks/v54-5478683c.nnue \
+  https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v54-5478683c.nnue
+printf '%s  %s\n' \
+  '5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf' \
+  'rust/networks/v54-5478683c.nnue' | shasum -a 256 -c -
 swift run reckless-smoke    # drives uci → uciok → go depth 1 → bestmove
-swift test                  # 4 suites: loader offline + output-cancellation + hermetic download/cancellation, plus the net-guarded live engine smoke
 ```
 
 The default `swift test` run never touches the network. The live engine smoke test

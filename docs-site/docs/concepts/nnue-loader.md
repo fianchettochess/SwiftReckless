@@ -16,7 +16,7 @@ Reckless v0.9 uses a single NNUE network:
 | Filename | `v54-5478683c.nnue` |
 | Size | ~60 MB |
 | SHA-256 | `5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf` |
-| Download source | [RecklessNetworks releases](https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/) |
+| Download source | [RecklessNetworks release](https://github.com/codedeliveryservice/RecklessNetworks/releases/tag/networks) |
 
 The filename encodes the first 8 hex characters of the SHA-256 (`5478683c`), the
 same convention Stockfish uses. The loader verifies the **full** SHA-256 digest

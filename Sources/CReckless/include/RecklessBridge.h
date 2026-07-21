@@ -41,7 +41,7 @@ extern "C" {
 ///   * Call `rk_destroy` EXACTLY ONCE per non-NULL `rk_create`. A second
 ///     `rk_destroy` on the same handle is a double-free / use-after-free, and any
 ///     `rk_send_command` / `rk_set_output_callback` after `rk_destroy`
-///     dereferences freed memory — undefined behaviour; the handle is dangling
+///     dereferences freed memory — undefined behavior; the handle is dangling
 ///     once destroyed.
 ///   * Do not call these concurrently on the same handle; serialize them.
 ///   * NULL handles and a NULL `command` are defensively no-ops; every other

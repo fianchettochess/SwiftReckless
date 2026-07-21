@@ -1,7 +1,8 @@
 # Usage Examples
 
 The following examples use only the public Swift API (`RecklessEngine` and
-`RecklessNetworkLoader`). All snippets assume `import SwiftReckless`.
+`RecklessNetworkLoader`). Each standalone snippet includes its required
+imports.
 
 !!! warning "Use `cancellationSafeOutput` for sequential reads"
     `output` is a single-consumer `AsyncStream` — breaking out of its loop ends it
@@ -14,6 +15,7 @@ The following examples use only the public Swift API (`RecklessEngine` and
 ## Setup: provision the net, create the engine, and handshake
 
 ```swift
+import Foundation
 import SwiftReckless
 
 func makeEngine() async throws -> RecklessEngine {

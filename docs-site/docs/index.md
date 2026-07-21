@@ -1,7 +1,8 @@
 # SwiftReckless
 
-A Swift Package Manager wrapper around the [Reckless](https://github.com/codedeliveryservice/Reckless)
-chess engine — a competitive UCI engine written in Rust (~3000 Elo, Super-GM level).
+A Swift Package Manager wrapper around the
+[Reckless](https://github.com/codedeliveryservice/Reckless) chess engine, a UCI
+engine written in Rust and licensed under AGPL-3.0.
 
 The engine runs **in-process** via a Rust-to-C FFI bridge; each UCI output line is
 delivered to the Swift layer as an element of an `AsyncStream<String>`. The Swift API
@@ -37,6 +38,7 @@ either engine with minimal changes.
 ## Quick start
 
 ```swift
+import Foundation
 import SwiftReckless
 
 // 1. Ensure the NNUE net exists in a writable directory.

@@ -33,7 +33,7 @@
 # PER-ARCH PERFORMANCE FLAGS:
 #   aarch64-*  : +neon                 (NEON is baseline on every Apple Silicon /
 #                                       A-series chip; activates Reckless's
-#                                       vectorised NNUE accumulator)
+#                                       vectorized NNUE accumulator)
 #   x86_64-*   : +avx2,+bmi2,+popcnt   (optimized Intel build; requires a
 #                                       Haswell-class CPU or newer)
 #

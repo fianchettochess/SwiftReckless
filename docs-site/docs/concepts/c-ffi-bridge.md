@@ -9,8 +9,8 @@ subprocess is spawned; the engine runs on a background thread inside the host pr
 | Layer | Target | Role |
 |---|---|---|
 | Rust crate (`creckless`) | `crate-type = ["staticlib", "rlib"]` | Runs Reckless's UCI loop on a background thread; exposes 4 `extern "C"` symbols with the `rk_ffi_*` prefix |
-| C shim (`CReckless`) | SPM module | `RecklessBridge.c` forwards `rk_*` → `rk_ffi_*`; `RecklessHostStubs.c` supplies no-op `rk_ffi_*` on non-Android source-arm hosts; the public C header is the Swift module boundary |
-| Swift (`SwiftReckless`) | SPM module | `RecklessEngine` wraps `RKEngineRef`; `AsyncStream` output; `RecklessNetworkLoader`; mirrors `StockfishEngine` |
+| C shim (`CReckless`) | SwiftPM module | `RecklessBridge.c` forwards `rk_*` → `rk_ffi_*`; `RecklessHostStubs.c` supplies no-op `rk_ffi_*` on non-Android source-arm hosts; the public C header is the Swift module boundary |
+| Swift (`SwiftReckless`) | SwiftPM module | `RecklessEngine` wraps `RKEngineRef`; `AsyncStream` output; `RecklessNetworkLoader`; mirrors `StockfishEngine` |
 
 ## The C header (`RecklessBridge.h`)
 
