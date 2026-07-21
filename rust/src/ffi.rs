@@ -14,8 +14,8 @@
 // rk_ffi_create:
 //   0. Acquire a process-wide lifecycle lease. I/O is per-instance, but the
 //      engine's NNUE weights/tables are global and overlapping searches are not
-//      safe. The pinned fork's lookup initialization is also non-idempotent, so
-//      a second successful engine lifetime is rejected until that fork is fixed.
+//      safe. The pinned fork makes initialization restart-safe, so a clean
+//      destroy releases this lease for a later sequential lifetime.
 //   1. Create an mpsc channel (tx stored in EngineState; rx consumed by the
 //      engine thread).
 //   2. Create Arc<Mutex<SharedCallback>> shared between EngineState and the

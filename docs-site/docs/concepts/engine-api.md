@@ -22,9 +22,9 @@ against destroy) plus the Rust mutex/channel implementation.
 
 !!! danger "One live engine per process"
     The Rust engine owns process-global state: lookup tables and the loaded NNUE
-    weights. Running two `RecklessEngine` instances concurrently is undefined behaviour.
-    The pinned fork currently permits one successful engine lifetime per
-    process. A later initializer fails cleanly; see the lifecycle note below.
+    weights. SwiftReckless rejects an overlapping engine with a `nil` initializer.
+    Sequential lifetimes are supported after the current engine completes a
+    clean `shutdown()`; see the lifecycle note below.
 
 !!! warning "NNUE net must be present before init"
     `init(networkDirectory:)` returns `nil` if `v54-5478683c.nnue` is not present in
@@ -199,11 +199,11 @@ The Rust FFI crate guarantees:
 2. After `rk_destroy` returns, no further output callbacks can fire.
 3. All memory allocated by the Rust engine (NNUE weights, hash tables) is freed.
 
-There is no use-after-free window. However, pinned fork revision `420b3d7`
-cannot safely initialize its global cuckoo/NNUE lookup tables twice. The FFI
-therefore rejects any second engine creation in one process. Restart support
-requires `std::sync::Once` guards in the fork, a pin bump, and rebuilt binary
-artifacts.
+There is no use-after-free window. Pinned fork tag `swiftreckless-v0.9.1`
+(commit `de35beac9074137e9776af14859bf6f40562553c`) guards global table
+initialization, joins the worker pool, and supports unloading the NNUE network.
+The FFI therefore rejects overlap but releases its lifecycle slot after a clean
+destroy so another sequential engine lifetime can start.
 
 ## See also
 

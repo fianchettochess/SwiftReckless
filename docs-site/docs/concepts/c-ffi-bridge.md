@@ -71,9 +71,10 @@ void        rk_send_command(...)                 { rk_ffi_send_command(...); }
   crate. Swift never needs to manage its own thread for the engine.
 - Input is delivered via `mpsc::Sender`; `rk_send_command` is therefore thread-safe
   (it only calls `Sender::send`).
-- Each UCI output line fires the registered `RKOutputCallback` on the **engine thread**.
-  `RecklessEngine` feeds its lock-protected output FIFO (`RecklessOutputStorage`)
-  from the callback, so no additional synchronization is needed on the Swift side.
+- Each UCI output line fires the registered `RKOutputCallback` on the engine
+  thread or a search-worker thread. `RecklessEngine` feeds its lock-protected
+  output FIFO (`RecklessOutputStorage`) from the callback, so callers must not
+  assume a particular callback thread or call back into `rk_ffi_*` from it.
 - `rk_destroy` sends `"quit"`, drops the `Sender` (causing `run_io` to observe
   channel closure), and `join()`s the thread. After it returns, the callback can
   never fire — there is no use-after-free window.
@@ -86,9 +87,9 @@ stdout/fd redirection**. There is no global stream manipulation; all I/O flows
 through the `mpsc` channel and the C callback registered via `rk_set_output_callback`.
 
 This design eliminates the class of bugs caused by a leaked stream-buffer swap.
-(It also clears the path to future create→destroy→create-again support, but the
-currently pinned fork still allows only one engine lifetime per process — see
-[Engine API → Teardown sequence](engine-api.md#teardown-sequence).)
+The pinned fork supports create→destroy→create-again lifecycles; overlap remains
+prohibited because the engine owns process-global tables and NNUE state. See
+[Engine API → Teardown sequence](engine-api.md#teardown-sequence).
 
 ## Swift-to-C mapping in `RecklessEngine`
 

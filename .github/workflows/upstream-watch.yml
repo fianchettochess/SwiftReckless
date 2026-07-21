@@ -8,7 +8,7 @@ name: Upstream watch
 # This workflow only NOTIFIES. It never fetches source, builds, tags, or
 # releases. Ingesting a new Reckless version is inherently manual here: the
 # build uses the patched fork `fianchettochess/Reckless`, so an update means
-# rebasing four custom patches onto the new upstream tag — not a mechanical
+# rebasing five custom patches onto the new upstream tag — not a mechanical
 # swap. The tracking issue carries that checklist.
 #
 # Upstream tags `v0.NN.0-dev-*` prereleases but publishes only stable `vX.Y.Z`
@@ -26,12 +26,13 @@ permissions:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
       UPSTREAM_REPO: codedeliveryservice/Reckless
       UPSTREAM_NAME: Reckless
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Compare upstream release against pinned version
         run: |

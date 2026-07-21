@@ -196,6 +196,6 @@ engine.shutdown() // joins the Rust thread, frees state, and finishes output
 // Releasing the reference also triggers deinit-based teardown if omitted.
 ```
 
-The currently pinned fork supports only **one engine lifetime per process**.
-After `shutdown()`, create a new process—not another `RecklessEngine`—until the
-fork's global lookup initialization is guarded for restart safety.
+Only one engine may be live at a time. After `shutdown()` returns, a new
+`RecklessEngine` may be created in the same process; the pinned fork supports
+restartable sequential lifetimes.

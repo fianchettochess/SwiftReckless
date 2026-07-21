@@ -1,153 +1,263 @@
 name: Release binary
 
-# Build RecklessFFI.xcframework in CI (all Apple slices), publish it as a GitHub
-# release asset, and tag a commit whose Package.swift references that asset by
-# `url:` + `checksum:` (binary lives in the release, not the repo). Mirrors the
-# SwiftStockfish release model.
-#
-# TRIGGERS: pushing a release tag (e.g. `0.9.0`) is the primary path; manual
-# workflow_dispatch (with a `version` input) is the fallback for re-cutting a tag
-# that already exists. Either way the run builds the xcframework, hashes it,
-# rewrites Package.swift to url+checksum, and FORCE-MOVES the tag onto that
-# rewritten commit — so the checksum in the tagged Package.swift always matches
-# the attached zip. The tag force-push uses GITHUB_TOKEN, which by GitHub's design
-# does NOT start another workflow run, so the push trigger cannot loop.
-#
-# WHY main is never pushed: `main` is intentionally kept PATH-BASED (its
-# binaryTarget points at the COMMITTED Frameworks/RecklessFFI.xcframework). The
-# url-rewritten commit lives ONLY on the release TAG: we commit it on a DETACHED
-# HEAD, tag that commit, and push just the tag. `main` is never mutated.
-#
-# The xcframework carries the full Apple gamut (iOS / iOS-sim / macOS / Mac
-# Catalyst / tvOS / watchOS / visionOS). The tier-3 slices (tvOS/watchOS/visionOS)
-# are built with a nightly toolchain + `-Z build-std`; Tools/build-xcframework.sh
-# installs the toolchains it needs.
+# Releases are deliberately manual. The workflow starts from the current
+# default-branch commit, rebuilds and tests the exact XCFramework, creates the
+# URL-based manifest commit, then creates one stable semver tag through a
+# draft release. It never force-moves a tag and never mutates `main`.
 
 on:
-  push:
-    tags:
-      - '*.*.*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version / tag (e.g. 0.9.0)'
+        description: 'New release version / tag (for example 0.9.9)'
         required: true
         type: string
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
+env:
+  VERSION: ${{ inputs.version }}
+  ASSET: RecklessFFI.xcframework.zip
+
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-26
+    timeout-minutes: 240
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout default-branch source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
-      - name: Validate version and check for collisions
+      - name: Validate version, source revision, and collisions
         env:
-          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$'; then
-            echo "::error::invalid version '${VERSION}' — expected e.g. 0.9.0 (N.N.N[.-suffix])"
+          if ! printf '%s' "${VERSION}" | \
+            grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::invalid version '${VERSION}' — expected stable N.N.N"
             exit 1
           fi
-          if ! git check-ref-format "refs/tags/${VERSION}"; then
-            echo "::error::version '${VERSION}' is not a valid git tag name"
+          git check-ref-format "refs/tags/${VERSION}"
+          git fetch --no-tags origin "${DEFAULT_BRANCH}"
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/${DEFAULT_BRANCH}")" ]; then
+            echo "::error::dispatch this workflow from the current ${DEFAULT_BRANCH} head"
             exit 1
           fi
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null \
-              || git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
-              echo "::error::tag '${VERSION}' already exists — pick a new version, or delete the tag/release and re-dispatch"
-              exit 1
+          assert_tag_absent() {
+            local status
+            if git ls-remote --exit-code --tags origin \
+              "refs/tags/${VERSION}" >/dev/null; then
+              echo "::error::tag '${VERSION}' already exists; release tags are never re-cut"
+              return 1
+            else
+              status=$?
+              if [ "${status}" -ne 2 ]; then
+                echo "::error::could not verify that tag '${VERSION}' is unused"
+                return "${status}"
+              fi
             fi
-          fi
-          if gh release view "${VERSION}" >/dev/null 2>&1; then
-            echo "::error::a release '${VERSION}' already exists — pick a new version or delete it first"
+          }
+          assert_tag_absent
+          RELEASE_TAGS="$(gh release list --limit 10000 --json tagName \
+            --jq '.[].tagName')"
+          if printf '%s\n' "${RELEASE_TAGS}" | grep -qxF "${VERSION}"; then
+            echo "::error::release '${VERSION}' already exists"
             exit 1
           fi
-          echo "version '${VERSION}' is valid and unused"
 
       - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
-          xcode-version: latest-stable
+          xcode-version: '26.6'
 
-      # Build every Apple slice into Frameworks/RecklessFFI.xcframework. The
-      # script installs the rustup targets + the nightly/rust-src it needs for the
-      # tier-3 (tvOS/watchOS/visionOS) build-std slices.
-      - name: Build xcframework
+      - name: Build exact XCFramework
         run: |
           chmod +x Tools/build-xcframework.sh
           ./Tools/build-xcframework.sh
 
-      # Zip exactly as SwiftPM expects a binaryTarget archive.
-      - name: Zip xcframework for SPM
+      - name: Validate architecture, deployment, and optimized Intel slices
         run: |
-          ditto -c -k --sequesterRsrc --keepParent \
-            Frameworks/RecklessFFI.xcframework RecklessFFI.xcframework.zip
+          set -euo pipefail
+          XCF='Frameworks/RecklessFFI.xcframework'
+          WATCH="${XCF}/watchos-arm64_arm64_32/libcreckless-watchos.a"
+          MAC="${XCF}/macos-arm64_x86_64/libcreckless-macos.a"
+          plutil -lint "${XCF}/Info.plist"
+          lipo -verify_arch arm64 "${XCF}/ios-arm64/libcreckless.a"
+          lipo -verify_arch arm64 x86_64 \
+            "${XCF}/ios-arm64_x86_64-simulator/libcreckless-ios-sim.a"
+          lipo -verify_arch arm64 x86_64 \
+            "${XCF}/ios-arm64_x86_64-maccatalyst/libcreckless-maccatalyst.a"
+          lipo -verify_arch arm64 "${XCF}/tvos-arm64/libcreckless.a"
+          lipo -verify_arch arm64 x86_64 \
+            "${XCF}/tvos-arm64_x86_64-simulator/libcreckless-tvos-sim.a"
+          lipo -verify_arch arm64_32 arm64 "${WATCH}"
+          lipo -verify_arch arm64 x86_64 \
+            "${XCF}/watchos-arm64_x86_64-simulator/libcreckless-watchos-sim.a"
+          lipo -verify_arch arm64 "${XCF}/xros-arm64/libcreckless.a"
+          lipo -verify_arch arm64 "${XCF}/xros-arm64-simulator/libcreckless.a"
+          lipo -verify_arch arm64 x86_64 "${MAC}"
 
-      - name: Compute checksum
+          minos() {
+            otool -arch "$1" -l "$2" | \
+              awk '$1 == "minos" { print $2 }' | sort -u
+          }
+          test "$(minos arm64_32 "${WATCH}")" = '6.0'
+          test "$(minos arm64 "${WATCH}")" = '26.0'
+
+          DISASSEMBLY="${RUNNER_TEMP}/swiftreckless-x86_64.txt"
+          otool -arch x86_64 -tvV "${MAC}" > "${DISASSEMBLY}"
+          grep -Eq '[[:space:]](vpbroadcast|vpadd|vpmadd)' "${DISASSEMBLY}"
+          grep -Eq '[[:space:]](pextq|pdepq|mulxq|bzhiq)' "${DISASSEMBLY}"
+          rm -f "${DISASSEMBLY}"
+
+      - name: Stage and verify the live NNUE network
+        run: |
+          set -euo pipefail
+          mkdir -p rust/networks
+          curl -fsSL -o rust/networks/v54-5478683c.nnue \
+            https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v54-5478683c.nnue
+          printf '%s  %s\n' \
+            '5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf' \
+            'rust/networks/v54-5478683c.nnue' | shasum -a 256 -c -
+
+      - name: Test Rust FFI against the locked graph
+        run: cargo test --manifest-path rust/Cargo.toml --locked
+
+      - name: Test the freshly rebuilt binary and live engine
+        run: swift test --scratch-path .build-release
+
+      - name: Archive and verify the exact asset
         id: checksum
         run: |
-          CHECKSUM="$(swift package compute-checksum RecklessFFI.xcframework.zip)"
-          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
-          echo "Computed checksum: $CHECKSUM"
-
-      - name: Create release and upload asset
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ github.event.inputs.version || github.ref_name }}
-        run: |
           set -euo pipefail
-          gh release create "${VERSION}" RecklessFFI.xcframework.zip \
-            --title "${VERSION}" \
-            --notes "Prebuilt multi-arch \`RecklessFFI.xcframework\` for SwiftReckless ${VERSION} (full Apple gamut: iOS / iOS-sim / macOS / Mac Catalyst / tvOS / watchOS / visionOS).
+          ditto -c -k --sequesterRsrc --keepParent \
+            Frameworks/RecklessFFI.xcframework "${ASSET}"
+          CHECKSUM="$(swift package compute-checksum "${ASSET}")"
+          echo "checksum=${CHECKSUM}" >> "${GITHUB_OUTPUT}"
 
-          Consume via SwiftPM at this tag — \`Package.swift\` pins this asset by \`url:\` + \`checksum:\`. The binary lives in this release (not in git). NNUE nets load at runtime via RecklessNetworkLoader."
-          if ! gh release view "${VERSION}" --json assets \
-              --jq '.assets[].name' | grep -qxF 'RecklessFFI.xcframework.zip'; then
-            echo "::error::release asset RecklessFFI.xcframework.zip did not upload"
-            exit 1
-          fi
+          VERIFY_DIR="$(mktemp -d)"
+          trap 'rm -rf "${VERIFY_DIR}"' EXIT
+          ditto -x -k "${ASSET}" "${VERIFY_DIR}"
+          diff -qr Frameworks/RecklessFFI.xcframework \
+            "${VERIFY_DIR}/RecklessFFI.xcframework"
 
-      - name: Rewrite Package.swift to url + checksum
+      - name: Create the final detached release commit
+        id: release_commit
         env:
-          VERSION: ${{ github.event.inputs.version || github.ref_name }}
-          REPO: ${{ github.repository }}
           CHECKSUM: ${{ steps.checksum.outputs.checksum }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          git checkout --detach
           python3 .github/scripts/rewrite_binary_target.py \
-            "https://github.com/${REPO}/releases/download/${VERSION}/RecklessFFI.xcframework.zip" \
+            "https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}" \
             "${CHECKSUM}"
           swift package dump-package >/dev/null
 
-      # main commits the xcframework, so this git rm is REQUIRED — it strips the
-      # ~150 MB binary from the tagged commit; the .gitignore additions keep a
-      # later `git add -A` from sweeping the binary or the release zip back in.
-      - name: Drop any committed binary + release zip; ignore future ones
-        run: |
           git rm -rf --ignore-unmatch Frameworks/RecklessFFI.xcframework
-          rm -f RecklessFFI.xcframework.zip
-          for pat in 'Frameworks/*.xcframework' 'RecklessFFI.xcframework.zip'; do
-            grep -qxF "$pat" .gitignore || printf '%s\n' "$pat" >> .gitignore
+          for pattern in 'Frameworks/*.xcframework' 'RecklessFFI.xcframework.zip'; do
+            grep -qxF "${pattern}" .gitignore || printf '%s\n' "${pattern}" >> .gitignore
           done
+          git add Package.swift .gitignore
+          git diff --cached --check
 
-      - name: Commit rewritten manifest on a detached tag commit
-        env:
-          VERSION: ${{ github.event.inputs.version || github.ref_name }}
-        run: |
-          set -euo pipefail
+          UNEXPECTED="$(git diff --cached --name-only | \
+            grep -Ev '^(Package.swift|\.gitignore|Frameworks/RecklessFFI\.xcframework/)' || true)"
+          if [ -n "${UNEXPECTED}" ]; then
+            echo "::error::unexpected paths staged for the release commit"
+            printf '%s\n' "${UNEXPECTED}"
+            exit 1
+          fi
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --detach
-          git add Package.swift .gitignore
-          git commit -m "Release ${VERSION}: binary xcframework as a release asset"
-          git tag -f "${VERSION}"
-          git push --force origin "refs/tags/${VERSION}"
+          git commit -m "Release ${VERSION}: host XCFramework as a release asset"
+          echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Stage, verify, and publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_COMMIT: ${{ steps.release_commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          PREP_BRANCH="release-prep/${VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          PREP_PUSHED=0
+          RELEASE_ID=''
+          PUBLISHED=0
+          assert_tag_absent() {
+            local status
+            if git ls-remote --exit-code --tags origin \
+              "refs/tags/${VERSION}" >/dev/null; then
+              echo "::error::tag '${VERSION}' appeared during this release run"
+              return 1
+            else
+              status=$?
+              if [ "${status}" -ne 2 ]; then
+                echo "::error::could not verify that tag '${VERSION}' is unused"
+                return "${status}"
+              fi
+            fi
+          }
+          cleanup() {
+            if [ "${PUBLISHED}" -eq 0 ] && [ -n "${RELEASE_ID}" ]; then
+              CURRENT_RELEASE_ID="$(gh release view "${VERSION}" \
+                --json databaseId --jq '.databaseId' 2>/dev/null || true)"
+              RELEASE_STATE="$(gh api \
+                "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+                --jq '.draft' 2>/dev/null || true)"
+              if [ "${RELEASE_STATE}" = 'true' ] && \
+                 [ "${CURRENT_RELEASE_ID}" = "${RELEASE_ID}" ] && \
+                 [ "$(gh release view "${VERSION}" --json targetCommitish \
+                    --jq '.targetCommitish' 2>/dev/null || true)" = \
+                   "${RELEASE_COMMIT}" ]; then
+                gh api --method DELETE \
+                  "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" >/dev/null || true
+              fi
+            fi
+            if [ "${PREP_PUSHED}" -eq 1 ]; then
+              git push \
+                --force-with-lease="refs/heads/${PREP_BRANCH}:${RELEASE_COMMIT}" \
+                origin ":refs/heads/${PREP_BRANCH}" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          git push origin "${RELEASE_COMMIT}:refs/heads/${PREP_BRANCH}"
+          PREP_PUSHED=1
+          assert_tag_absent
+          gh release create "${VERSION}" \
+            --draft \
+            --target "${RELEASE_COMMIT}" \
+            --title "${VERSION}" \
+            --notes "Prebuilt multi-arch RecklessFFI.xcframework for SwiftReckless ${VERSION}.
+
+          The tagged Package.swift pins this exact asset by URL and checksum. Optimized x86_64 slices require AVX2/BMI2/POPCNT (Haswell-class or newer) and have no runtime baseline dispatch. The NNUE network remains a separately downloaded runtime asset."
+          RELEASE_ID="$(gh release view "${VERSION}" \
+            --json databaseId --jq '.databaseId')"
+          test "$(gh release view "${VERSION}" --json targetCommitish \
+            --jq '.targetCommitish')" = "${RELEASE_COMMIT}"
+          gh release upload "${VERSION}" "${ASSET}"
+
+          test "$(gh release view "${VERSION}" --json isDraft --jq '.isDraft')" = 'true'
+          test "$(gh release view "${VERSION}" --json assets --jq \
+            '.assets[] | select(.name == "RecklessFFI.xcframework.zip") | .name')" = "${ASSET}"
+
+          VERIFY_ASSET_DIR="$(mktemp -d)"
+          gh release download "${VERSION}" --pattern "${ASSET}" --dir "${VERIFY_ASSET_DIR}"
+          cmp "${ASSET}" "${VERIFY_ASSET_DIR}/${ASSET}"
+          rm -rf "${VERIFY_ASSET_DIR}"
+
+          assert_tag_absent
+          gh release edit "${VERSION}" --draft=false
+          PUBLISHED=1
+          test "$(gh release view "${VERSION}" --json isDraft --jq '.isDraft')" = 'false'
+          test "$(git ls-remote origin "refs/tags/${VERSION}" | \
+            awk 'NR == 1 { print $1 }')" = "${RELEASE_COMMIT}"

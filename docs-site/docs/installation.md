@@ -17,6 +17,11 @@ SwiftReckless is a Swift Package Manager library.
 Swift tools version 6.0. See [Build model](concepts/build-model.md) for the full
 platform matrix and cross-compile details.
 
+!!! note "Intel CPU requirement"
+    The prebuilt Apple x86_64 slices intentionally retain AVX2/BMI2 performance
+    and require a Haswell-class Intel CPU or newer. Reckless does not runtime-
+    dispatch this binary to a baseline implementation on older Intel hardware.
+
 !!! warning "AGPL-3.0"
     SwiftReckless links the Reckless engine and is a **AGPL-3.0** work. Consuming it
     carries AGPL-3.0 obligations on your application. See
@@ -27,7 +32,7 @@ platform matrix and cross-compile details.
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/fianchettochess/SwiftReckless", from: "0.9.0"),
+    .package(url: "https://github.com/fianchettochess/SwiftReckless", from: "0.9.8"),
 ],
 targets: [
     .target(
@@ -69,7 +74,6 @@ when the Rust engine changes:
 
 ```bash
 # macOS only (development)
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
 bash Tools/build-macos.sh
 swift build
 ```
@@ -81,9 +85,10 @@ bash Tools/build-xcframework.sh
 ```
 
 The Rust toolchain prerequisites are documented in [Build model](concepts/build-model.md).
-Release CI publishes the xcframework as a GitHub release asset; a `url:` + `checksum:`
-binary target in release tags means consuming a tagged version via SPM requires no local
-build step.
+The manual Release workflow builds and tests the exact xcframework, stages it in
+a draft release, verifies the uploaded bytes, and creates the final tag once at a
+`url:` + `checksum:` manifest. Consuming a tagged version via SPM therefore needs
+no local Rust build.
 
 ## Verifying the install
 

@@ -12,7 +12,7 @@
 //
 // This crate has exactly ONE engine test, so cargo test's default parallelism
 // cannot introduce an unrelated engine. The test itself verifies that overlap
-// and the pinned fork's currently-unsafe restart both fail promptly.
+// fails promptly and a clean destroy permits a complete second lifetime.
 
 use creckless::ffi::{
     rk_ffi_create, rk_ffi_destroy, rk_ffi_send_command, rk_ffi_set_output_callback,

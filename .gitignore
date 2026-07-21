@@ -11,7 +11,8 @@ xcuserdata/
 
 # Rust
 rust/target/
-Cargo.lock
+# `rust/Cargo.lock` is committed because this repository builds and ships
+# native binary artifacts from the Rust crate.
 
 # Python bytecode from .github/scripts helpers — never commit build artifacts.
 __pycache__/
