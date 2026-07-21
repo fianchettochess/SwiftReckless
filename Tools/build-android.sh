@@ -13,7 +13,7 @@
 # PERFORMANCE FLAGS (per-arch):
 #
 #   aarch64-linux-android (arm64-v8a — primary Android target, ~95% of devices):
-#     +neon       — always present on ARMv8-A; enables Reckless's vectorised
+#     +neon       — always present on ARMv8-A; enables Reckless's vectorized
 #                   NNUE path.  On modern mid-high range devices (Cortex-A76+,
 #                   Snapdragon 8xx), consider also passing:
 #                     +dotprod,+fp16

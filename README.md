@@ -6,9 +6,9 @@
 [![CI](https://github.com/fianchettochess/SwiftReckless/actions/workflows/ci.yml/badge.svg)](https://github.com/fianchettochess/SwiftReckless/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-A Swift Package Manager wrapper for the [Reckless](https://github.com/codedeliveryservice/Reckless)
-chess engine, a competitive UCI engine written in Rust and licensed under
-AGPL-3.0.
+A Swift package that wraps the
+[Reckless](https://github.com/codedeliveryservice/Reckless) chess engine, a UCI
+engine written in Rust and licensed under AGPL-3.0.
 
 Its API parallels [SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish),
 allowing a shared UCI integration layer to support either engine with minimal
@@ -65,6 +65,7 @@ SwiftReckless/
 │   └── reckless-smoke/
 │       └── main.swift                  # End-to-end UCI smoke executable (`swift run reckless-smoke`)
 ├── Tests/
+│   ├── RemoteConsumer/                  # SemVer-tagged remote-dependency CI fixture
 │   └── SwiftRecklessTests/
 │       ├── SwiftRecklessTests.swift    # Offline loader, output cancellation, and net-guarded live engine smoke
 │       ├── RecklessNetworkLoaderCancellationTests.swift  # hermetic Transport-seam download/cancellation suite
@@ -84,9 +85,9 @@ SwiftReckless/
 ├── .github/workflows/                 # ci.yml (push/PR), release.yml (tested draft release and one-time tag), upstream-watch.yml (daily notify-only)
 ├── docs-site/                         # MkDocs documentation site
 └── Tools/
-    ├── build-macos.sh                 # macOS fat lib → xcframework
+    ├── build-macos.sh                 # macOS fat library → XCFramework
     ├── build-xcframework.sh           # All supported Apple destinations
-    └── build-android.sh               # Android staticlibs via cargo-ndk
+    └── build-android.sh               # Android static libraries via cargo-ndk
 ```
 
 ### Three-layer design (same as SwiftStockfish)
@@ -132,17 +133,19 @@ lifetimes are still rejected with `NULL`.
 
 ## Build model
 
-`Package.swift` has two arms and selects between them from the environment:
+`Package.swift` selects between two arms using the build host and environment:
 
 | Condition | Arm | What links |
 |---|---|---|
 | Apple host, default (and **always** under Xcode) | **binary** | `.binaryTarget` → `Frameworks/RecklessFFI.xcframework` and `RecklessBridge.c` |
-| `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1` (Android / forced CLI) | **source** | `RecklessBridge.c` and `RecklessHostStubs.c`; on Android, links `libcreckless.a` from `RECKLESS_LIB_DIR` |
+| Non-Apple host, or `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1` in an Apple command-line build | **source** | `RecklessBridge.c` and `RecklessHostStubs.c`; Android integration also links a cross-built `libcreckless.a` |
 
-- **`SWIFTRECKLESS_FORCE_SOURCE_BUILD=1`** forces the source arm.
-- **`RECKLESS_LIB_DIR`** points at the directory holding the cross-built
-  `libcreckless.a` (defaults to the host `rust/target/release`; set it to
-  `rust/target/<triple>/release` for a cross-build).
+- **`SWIFTRECKLESS_FORCE_SOURCE_BUILD=1`** selects the source arm outside
+  Xcode. Xcode deliberately ignores it and always uses the binary arm.
+- **`RECKLESS_LIB_DIR`** is an integration input for the consuming Android root
+  package. It points at the directory holding the cross-built
+  `libcreckless.a`; SwiftReckless does not embed that machine-local path in its
+  published manifest.
 - **Under Xcode** (`__CFBundleIdentifier == com.apple.dt.Xcode`) the binary arm is
   always used, so an Xcode build never tries to link an Android ELF.
 - On Linux and every other non-Android host in the source arm,
@@ -160,8 +163,16 @@ Quick sanity check:
 
 ```bash
 swift build                 # Apple host: binary arm, links the existing XCFramework
-swift run reckless-smoke    # drives uci → uciok end-to-end
-swift test                  # Four suites: offline, cancellation, hermetic download, and live smoke tests
+swift test                  # Offline, cancellation, hermetic download, and net-guarded live suites
+
+# Optional live CLI smoke on the Apple binary arm: stage and verify the net first.
+mkdir -p rust/networks
+curl -fsSL -o rust/networks/v54-5478683c.nnue \
+  https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v54-5478683c.nnue
+printf '%s  %s\n' \
+  '5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf' \
+  'rust/networks/v54-5478683c.nnue' | shasum -a 256 -c -
+swift run reckless-smoke    # drives uci → uciok → go depth 1 → bestmove
 ```
 
 ## Building
@@ -214,7 +225,10 @@ XCFramework in
 ### Android / Skip (SkipFuse)
 
 The Android build uses the **source arm**. Cross-build the Rust static library,
-then point SwiftPM at it with `RECKLESS_LIB_DIR`:
+then have the consuming root package pass the selected archive as an
+Android-only link input. Local archive paths cannot live in SwiftReckless's
+published manifest because unsafe dependency flags make versioned products
+unusable.
 
 ```bash
 # Prerequisites
@@ -224,11 +238,37 @@ cargo install cargo-ndk --version 4.1.2 --locked
 bash Tools/build-android.sh
 # → android-libs/{arm64-v8a,armeabi-v7a,x86_64,x86}/libcreckless.a
 
-# Build the Swift package against a specific slice:
-RECKLESS_LIB_DIR=rust/target/aarch64-linux-android/release \
-SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 \
-  swift build --swift-sdk aarch64-android
+# Before building the consuming root package, select one absolute output path:
+export RECKLESS_LIB_DIR=/absolute/path/to/SwiftReckless/rust/target/aarch64-linux-android/release
+export SWIFTRECKLESS_FORCE_SOURCE_BUILD=1
 ```
+
+In the consuming root manifest, attach the archive to the application target:
+
+```swift
+let recklessLinkerSettings: [LinkerSetting]
+if let directory = Context.environment["RECKLESS_LIB_DIR"], !directory.isEmpty {
+    recklessLinkerSettings = [
+        .unsafeFlags(
+            ["\(directory)/libcreckless.a"],
+            .when(platforms: [.android])
+        ),
+    ]
+} else {
+    recklessLinkerSettings = []
+}
+
+// In the root application's target:
+.target(
+    name: "MyApp",
+    dependencies: [.product(name: "SwiftReckless", package: "SwiftReckless")],
+    linkerSettings: recklessLinkerSettings
+)
+```
+
+SwiftReckless safely declares the Android C++ runtime with
+`.linkedLibrary("c++")`; the root package supplies only the selected Rust
+archive path. Non-Android source-arm builds continue to use host stubs.
 
 `libcreckless.a` is a **static link input**. SwiftPM links the single slice named
 by `RECKLESS_LIB_DIR` (the example selects `aarch64-linux-android`) into the final
@@ -236,13 +276,11 @@ native output. Do not put these archives in Gradle `jniLibs`: that directory is
 for loadable `.so` libraries, and Android cannot load a `.a` at runtime. If the
 surrounding Skip/native build emits a `.so`, package that final shared library.
 
-> [!WARNING]
-> **Remote Android dependency limitation.** The Android source arm currently
-> supplies the archive path through a conditional SwiftPM `.unsafeFlags` linker
-> setting. This works for the local cross-build flow above, but SwiftPM can reject
-> active unsafe flags when the package is consumed as a version-pinned remote
-> dependency. Remote Android support therefore remains pending until that linkage
-> is replaced and covered by an end-to-end remote-consumer test.
+> [!NOTE]
+> **Remote-dependency safety.** The versioned SwiftReckless dependency contains
+> no unsafe build settings. Linux CI verifies this through a SemVer-tagged
+> `.package(url:)` consumer. The application remains responsible for testing
+> its Android root-target archive link end to end.
 
 The Skip/SkipFuse bridge pattern (`/* SKIP @bridge */` and SwiftJNI `callStatic`)
 used by the consuming application applies unchanged. Generic consumers
@@ -255,22 +293,23 @@ canceling one of its waiters does not finish output for later searches.
 
 | Property | Value |
 |---|---|
-| Upstream repo | https://github.com/codedeliveryservice/Reckless |
+| Upstream repository | [codedeliveryservice/Reckless](https://github.com/codedeliveryservice/Reckless) |
 | Version mapping | Upstream Reckless `0.9` maps to SwiftReckless `0.9.x`; wrapper-only releases increment the patch component |
 | Dependency actually used | Maintained fork **`github.com/fianchettochess/Reckless.git`**, pinned tag `swiftreckless-v0.9.1` (commit `de35beac9074137e9776af14859bf6f40562553c`), `default-features = false` (branch `swiftreckless` on upstream tag `v0.9.0`; five patches: a `[lib]` target, runtime NNUE loading, per-instance I/O, terminal-position guarding, and restart-safe lifecycle cleanup) |
 | Language | Rust |
 | License | **AGPL-3.0** |
 | Protocol | UCI (`run_io` implements the message loop) |
-| `crate-type` | Upstream Reckless is a **binary-only** crate — no library target, no FFI planned upstream. The fork adds a `[lib]` (`rlib`). The C-linkable `staticlib` comes from the wrapper crate `creckless` (`["staticlib", "rlib"]`). No `cdylib` anywhere. |
+| `crate-type` | The pinned upstream Reckless version is **binary-only** and defines no library target or FFI. The maintained fork adds a `[lib]` (`rlib`). The C-linkable `staticlib` comes from the wrapper crate `creckless` (`["staticlib", "rlib"]`). Neither crate defines a `cdylib`. |
 | NNUE | `v54-5478683c.nnue`, loaded at **runtime** from the `network_path` passed to `rk_create` (the fork removed upstream's compile-time `include_bytes!` embed) |
-| Weight provisioning | Downloaded by `RecklessNetworkLoader` on first launch to a caller-chosen directory; the runtime path is handed to `rk_create`. Net is never baked into the binary. |
+| Weight provisioning | Downloaded by `RecklessNetworkLoader` on first launch to a caller-chosen directory; the runtime path is handed to `rk_create`. The network is never baked into the binary. |
 | Effective dependencies | With `default-features = false`, transitively just `libc`. `cc`/`bindgen` are optional build-deps behind the disabled `syzygy` feature. |
 
 **Licensing.** SwiftReckless is distributed under the **GNU Affero General Public
 License, version 3** (see [`LICENSE`](LICENSE)). Because it links the Reckless
 engine's compiled code directly into its output (the `RecklessFFI.xcframework` on
-Apple platforms, or the source-built `libcreckless` static library elsewhere), the
-whole package is an AGPL-3.0 artifact. AGPL-3.0 is compatible with the GPLv3
+Apple platforms or the source-built `libcreckless` static library on Android), the
+whole package is an AGPL-3.0 artifact. Non-Android source-arm host stubs do not
+contain the engine. AGPL-3.0 is compatible with the GPLv3
 Stockfish already shipped in Fianchetto; a combined binary (if ever shipped) must
 offer source for both engines. **AGPL §13 (Remote Network Interaction):** if you
 run a modified version as part of a network-accessible service, you must offer that
@@ -285,11 +324,11 @@ Runtime strategy (the same as Stockfish networks in
 [SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish)):
 
 - `RecklessNetworkLoader().ensure(in:)` downloads from the
-  [RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/)
+  [RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks/releases/tag/networks)
   release page on first launch (~60 MB).
 - The complete pinned SHA-256 digest is verified after download on Apple,
   Linux, and Android (CryptoKit on Apple; swift-crypto elsewhere).
-- On Android the same loader runs (Foundation and URLSession via swift-corelibs-foundation).
+- On Android, the same loader runs (Foundation and URLSession via swift-corelibs-foundation).
 - The downloaded path is passed to `RecklessEngine(networkDirectory:)` →
   `rk_create(network_path)`, which loads it at runtime. When Reckless upgrades its network,
   update `RecklessNetworkLoader.network` (`filename`, `sha256`, and `downloadURL`) — no Rust
@@ -344,16 +383,22 @@ integration target. Apple binary-arm execution is gated by network presence at
 `rust/networks/`; non-Android source-arm builds use host stubs and cannot run the
 live engine.
 
+Linux CI also creates an ephemeral SemVer-tagged Git repository and builds the
+fixture in `Tests/RemoteConsumer` through a versioned `.package(url:)`
+dependency. This catches unsafe dependency settings that a root-package or
+local-path build would miss.
+
 ## Releasing
 
-Do not push or re-cut a version tag. In **Actions → Release binary → Run
-workflow**, choose the current default branch and enter a new stable `N.N.N`
-version. The workflow rejects existing tags and releases, rebuilds and inspects
-all XCFramework slices, stages and verifies the NNUE network, and runs both
-locked Rust tests and the live Swift engine suite against that artifact's macOS
-arm64 slice. Trusted
-Intel CI separately live-tests the committed AVX2/BMI2 x86_64 slice. The release
-job uses `macos-26` with Xcode 26.6, then archives and byte-verifies the asset,
+Releases are produced by **Actions → Release binary → Run workflow**, not by
+pushing a tag. Choose the current default branch and enter a new stable `N.N.N`
+version. Existing versions are never re-cut or force-moved. The workflow rejects
+versions outside the `.upstream-version`-derived `0.9.x` wrapper line, existing
+tags, and existing releases. It rebuilds and inspects all XCFramework slices, stages
+and verifies the NNUE network, and runs both locked Rust tests and the live Swift
+engine suite against that artifact's macOS arm64 slice. Trusted Intel CI
+separately live-tests the committed AVX2/BMI2 x86_64 slice. The release job uses
+`macos-26` with Xcode 26.6, then archives and byte-verifies the asset,
 creates the URL-based manifest commit on a detached
 HEAD, and uploads/re-downloads the asset through a draft release before
 publishing. The final tag is created once; `main` remains path-based.

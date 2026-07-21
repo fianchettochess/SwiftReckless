@@ -51,6 +51,16 @@ jobs:
         run: swift build
       - name: swift test
         run: swift test
+      - name: Versioned remote-consumer build
+        run: |
+          set -euo pipefail
+          BARE_REPO="${RUNNER_TEMP}/SwiftReckless.git"
+          git clone --bare . "${BARE_REPO}"
+          git --git-dir="${BARE_REPO}" tag 999.0.0 "${GITHUB_SHA}"
+          SWIFTRECKLESS_TEST_URL="file://${BARE_REPO}" \
+            swift run \
+              --package-path Tests/RemoteConsumer \
+              --scratch-path "${RUNNER_TEMP}/remote-consumer-build"
 
   macos-self-hosted:
     name: macOS — self-hosted (Intel Mac Pro, source arm)

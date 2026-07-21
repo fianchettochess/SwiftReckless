@@ -16,9 +16,9 @@
 //                       binaryTarget (the Rust FFI crate at `rust/`, built by
 //                       Tools/build-xcframework.sh).  In the source arm
 //                       (Android / forced source) the same C bridge compiles;
-//                       the Rust lib is supplied via RECKLESS_LIB_DIR on
-//                       Android, and `RecklessHostStubs.c` provides no-op
-//                       symbols on every other host (see `linkerSettings` below).
+//                       `RecklessHostStubs.c` provides no-op symbols on
+//                       non-Android hosts. On Android, the root application
+//                       supplies the cross-built Rust archive as a link input.
 //
 //   SwiftReckless      — Swift-facing API: `RecklessEngine` (mirrors
 //                       `StockfishEngine`), `RecklessNetworkLoader` (fetches
@@ -45,18 +45,18 @@ import PackageDescription
 
 // ── Platform detection ────────────────────────────────────────────────────────
 // Same dual-arm logic as SwiftStockfish: Apple hosts use the prebuilt
-// xcframework; non-Apple hosts must supply the Rust lib separately (or via a
-// later source-build arm).
+// XCFramework; non-Apple hosts use the source target. Non-Android hosts link
+// stubs; an Android root application supplies the Rust archive.
 #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
 let hostIsApple = true
 #else
 let hostIsApple = false
 #endif
 
-// Set SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 to skip the xcframework and force the
-// caller-supplied-lib path. Two intended callers:
-//   * the Android (Skip/SkipFuse) cross-build, which supplies an
-//     aarch64-linux-android `libcreckless.a` via RECKLESS_LIB_DIR;
+// Outside Xcode, set SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 to skip the XCFramework
+// and select the source target. Two intended callers:
+//   * the Android (Skip/SkipFuse) cross-build, whose root application supplies
+//     an aarch64-linux-android `libcreckless.a` link input;
 //   * a from-source macOS dev build via CLI `swift build`.
 let forceSource = Context.environment["SWIFTRECKLESS_FORCE_SOURCE_BUILD"] == "1"
 
@@ -68,7 +68,7 @@ let forceSource = Context.environment["SWIFTRECKLESS_FORCE_SOURCE_BUILD"] == "1"
 // failing with "Archive member '/' not a mach-o file". Xcode, and every process
 // it spawns (including SwiftPM manifest evaluation), inherits
 // __CFBundleIdentifier=com.apple.dt.Xcode; the gradle/Skip Android build does
-// not. So when we detect we're under Xcode we ALWAYS use the xcframework — the
+// not. So when we detect we're under Xcode we always use the XCFramework; the
 // source arm stays reachable only from a real cross-build / CLI `swift build`.
 let underXcode = Context.environment["__CFBundleIdentifier"] == "com.apple.dt.Xcode"
 
@@ -95,7 +95,7 @@ if useBinaryEngine {
 // ── Engine targets ────────────────────────────────────────────────────────────
 let engineTargets: [Target]
 if useBinaryEngine {
-    // APPLE PATH: link the prebuilt xcframework + compile the thin C bridge.
+    // APPLE PATH: link the prebuilt XCFramework and compile the thin C bridge.
     // At release time the Release workflow rewrites this `path:` binaryTarget
     // to `url:` + `checksum:` on the tagged commit (same pattern as
     // SwiftStockfish); `main` stays path-based.
@@ -104,7 +104,7 @@ if useBinaryEngine {
             name: "RecklessFFI",
             // COMMITTED to main (10 slices, ~150 MB, plain git — see the header
             // note); rebuilt on-demand by Tools/build-xcframework.sh only when
-            // the Rust engine changes. The xcframework carries the full Apple
+            // the Rust engine changes. The XCFramework carries the full Apple
             // gamut (10 slices): iOS, iOS-sim, macOS, Mac Catalyst, tvOS
             // (+sim), watchOS (+sim), visionOS (+sim). tvOS/watchOS/visionOS
             // are Rust Tier-3, built with a nightly toolchain + `-Z build-std`.
@@ -114,7 +114,7 @@ if useBinaryEngine {
             name: "CReckless",
             dependencies: ["RecklessFFI"],
             path: "Sources/CReckless",
-            // Only compile the thin C bridge; the engine lives in the xcframework.
+            // Only compile the thin C bridge; the engine lives in the XCFramework.
             sources: ["RecklessBridge.c"],
             publicHeadersPath: "include",
             cSettings: [
@@ -124,26 +124,17 @@ if useBinaryEngine {
         ),
     ]
 } else {
-    // NON-APPLE / forced-source path: the Rust static lib must be built and
-    // placed at the directory referenced by RECKLESS_LIB_DIR, then linked
-    // manually via linkerSettings.  This is the path taken by the Android
-    // (Skip / SkipFuse) build.
+    // NON-APPLE / forced-source path. Non-Android hosts compile link-compatible
+    // stubs. The Android root application must pass its cross-built
+    // libcreckless.a as a positional link input; keeping that local path out of
+    // this versioned package preserves remote-consumer safety.
     //
     // Typical invocation (Android cross-build):
-    //   RECKLESS_LIB_DIR=/path/to/rust/target/aarch64-linux-android/release \
     //   SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 \
+    //   RECKLESS_LIB_DIR=/path/to/rust/target/aarch64-linux-android/release \
     //   swift build --swift-sdk aarch64-android
-    //
-    // RECKLESS_LIB_DIR must point to the DIRECTORY that contains libcreckless.a
-    // (not the .a itself). The linker flag passes the full path to the archive.
-    //
-    // Fallback: if RECKLESS_LIB_DIR is unset we fall back to the repo-relative
-    // host release path. In practice the Android arm (the only consumer of the
-    // libPath below — see the `.android` platform gate) always sets the var
-    // explicitly to a per-triple dir, so this default is rarely linked.
-    let libDir = Context.environment["RECKLESS_LIB_DIR"]
-        ?? "rust/target/release"
-    let libPath = libDir + "/libcreckless.a"
+    // RECKLESS_LIB_DIR is interpreted by the root application manifest, not
+    // by this dependency manifest.
 
     engineTargets = [
         .target(
@@ -162,25 +153,10 @@ if useBinaryEngine {
                 .headerSearchPath("."),
             ],
             linkerSettings: [
-                // Link the locally-built Rust static library by passing its
-                // absolute path directly to the linker.  Passing the full path
-                // (rather than -L/-l) is required for ELF/Android targets where
-                // the Swift driver's -Xlinker passthrough can silently drop
-                // positional flags when wrapped through clang.
-                // Build the .a first:
-                //   cargo build --release \
-                //     --target aarch64-linux-android \
-                //     --manifest-path rust/Cargo.toml
-                // Then set RECKLESS_LIB_DIR to the output directory.
-                //
-                // ANDROID-ONLY: the .a here is an aarch64-linux-android ELF
-                // archive — linking it on any Apple pass is what produced the
-                // "not a mach-o file" failure. Non-Android builds of this arm
-                // resolve rk_ffi_* from RecklessHostStubs.c instead.
-                .unsafeFlags([
-                    libPath,
-                    "-lc++",
-                ], .when(platforms: [.android])),
+                // The Android Rust archive uses the NDK C++ runtime. The root
+                // application provides the archive path; this safe declaration
+                // propagates -lc++ without poisoning versioned consumers.
+                .linkedLibrary("c++", .when(platforms: [.android])),
             ]
         ),
     ]
@@ -224,7 +200,7 @@ let package = Package(
         // so its output won't collide with the test capture harness or other
         // subsystems. (Only one live engine per process — see RecklessEngine.)
         //
-        // Usage (Apple host uses the prebuilt xcframework):
+        // Usage (Apple binary arm, after staging rust/networks/*.nnue):
         //   swift run reckless-smoke
         //
         .executableTarget(
