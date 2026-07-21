@@ -98,20 +98,20 @@ jobs:
           WATCH="${XCF}/watchos-arm64_arm64_32/libcreckless-watchos.a"
           MAC="${XCF}/macos-arm64_x86_64/libcreckless-macos.a"
           plutil -lint "${XCF}/Info.plist"
-          lipo -verify_arch arm64 "${XCF}/ios-arm64/libcreckless.a"
-          lipo -verify_arch arm64 x86_64 \
-            "${XCF}/ios-arm64_x86_64-simulator/libcreckless-ios-sim.a"
-          lipo -verify_arch arm64 x86_64 \
-            "${XCF}/ios-arm64_x86_64-maccatalyst/libcreckless-maccatalyst.a"
-          lipo -verify_arch arm64 "${XCF}/tvos-arm64/libcreckless.a"
-          lipo -verify_arch arm64 x86_64 \
-            "${XCF}/tvos-arm64_x86_64-simulator/libcreckless-tvos-sim.a"
-          lipo -verify_arch arm64_32 arm64 "${WATCH}"
-          lipo -verify_arch arm64 x86_64 \
-            "${XCF}/watchos-arm64_x86_64-simulator/libcreckless-watchos-sim.a"
-          lipo -verify_arch arm64 "${XCF}/xros-arm64/libcreckless.a"
-          lipo -verify_arch arm64 "${XCF}/xros-arm64-simulator/libcreckless.a"
-          lipo -verify_arch arm64 x86_64 "${MAC}"
+          lipo "${XCF}/ios-arm64/libcreckless.a" -verify_arch arm64
+          lipo "${XCF}/ios-arm64_x86_64-simulator/libcreckless-ios-sim.a" \
+            -verify_arch arm64 x86_64
+          lipo "${XCF}/ios-arm64_x86_64-maccatalyst/libcreckless-maccatalyst.a" \
+            -verify_arch arm64 x86_64
+          lipo "${XCF}/tvos-arm64/libcreckless.a" -verify_arch arm64
+          lipo "${XCF}/tvos-arm64_x86_64-simulator/libcreckless-tvos-sim.a" \
+            -verify_arch arm64 x86_64
+          lipo "${WATCH}" -verify_arch arm64_32 arm64
+          lipo "${XCF}/watchos-arm64_x86_64-simulator/libcreckless-watchos-sim.a" \
+            -verify_arch arm64 x86_64
+          lipo "${XCF}/xros-arm64/libcreckless.a" -verify_arch arm64
+          lipo "${XCF}/xros-arm64-simulator/libcreckless.a" -verify_arch arm64
+          lipo "${MAC}" -verify_arch arm64 x86_64
 
           minos() {
             otool -arch "$1" -l "$2" | \
