@@ -32,7 +32,7 @@ platform matrix and cross-compile details.
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/fianchettochess/SwiftReckless", from: "0.9.8"),
+    .package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.9"),
 ],
 targets: [
     .target(
@@ -47,7 +47,7 @@ targets: [
 ### Xcode
 
 In Xcode: **File ▸ Add Package Dependencies…**, enter
-`https://github.com/fianchettochess/SwiftReckless`, and add the **SwiftReckless**
+`https://github.com/fianchettochess/SwiftReckless.git`, and add the **SwiftReckless**
 library product to your target.
 
 ### Products

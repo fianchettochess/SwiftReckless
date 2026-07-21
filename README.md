@@ -6,49 +6,53 @@
 [![CI](https://github.com/fianchettochess/SwiftReckless/actions/workflows/ci.yml/badge.svg)](https://github.com/fianchettochess/SwiftReckless/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-A Swift Package Manager wrapper around the [Reckless](https://github.com/codedeliveryservice/Reckless)
-chess engine — a competitive UCI engine written in Rust (AGPL-3.0).
+A Swift Package Manager wrapper for the [Reckless](https://github.com/codedeliveryservice/Reckless)
+chess engine, a competitive UCI engine written in Rust and licensed under
+AGPL-3.0.
 
-Structured as a sibling to [SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish)
-and designed so the existing `UCIInfoParser` / `EngineProbe` layer in Fianchetto can
-be adapted to either engine with minimal changes.
+Its API parallels [SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish),
+allowing a shared UCI integration layer to support either engine with minimal
+adaptation.
 
-> **Status: released & consumed.** Tagged releases `0.9.0`–`0.9.8` (latest adds
-> restartable engine lifetimes — the host can shed and respawn the engine, freeing
-> the ~63 MB net between lifetimes); each release publishes `RecklessFFI.xcframework`
-> as a `url:` + `checksum:` asset while `main` stays path-based with the prebuilt
-> xcframework **committed**. CI builds + tests both package arms on trusted pushes;
-> the manual Release workflow rebuilds the binary, stages the net, and validates
-> the real Rust/Swift engine before publishing. Consumed by the Fianchetto app
-> (iOS and Android). The `RecklessEngine` API
-> works end-to-end (verified: `swift test` runs a live
-> `uci → uciok / isready → readyok / go → bestmove` handshake when the net is
-> staged). The engine is a pinned git dependency on a maintained fork (see
-> [Reckless engine facts](#reckless-engine-facts)); it is **not** vendored in-tree
-> by design.
-
----
+> [!NOTE]
+> **Release status.** The `0.9.x` wrapper line packages upstream Reckless `0.9`.
+> Wrapper-only releases increment the patch component. Release tags use a
+> URL-based `RecklessFFI.xcframework` with a checksum, while `main` keeps the prebuilt
+> XCFramework committed as a path-based target. CI builds and tests both package
+> arms on trusted pushes. The manual release workflow rebuilds the binary, stages
+> the network, and validates the live Rust and Swift engine before publication.
+> With the network staged, `swift test` verifies the complete
+> `uci → uciok / isready → readyok / go → bestmove` exchange. The Fianchetto app
+> consumes the package on iOS and Android. The engine remains a pinned Git
+> dependency on a maintained fork rather than vendored source; see
+> [Reckless engine facts](#reckless-engine-facts).
 
 ## Installation
 
-Add **SwiftReckless** with Swift Package Manager:
+Add SwiftReckless to your package dependencies:
 
 ```swift
-.package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.8")
+.package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.9")
 ```
 
-The prebuilt Apple x86_64 slices intentionally retain AVX2/BMI2 performance
-and require a Haswell-class Intel CPU or newer. Reckless does not runtime-
-dispatch this binary to a baseline implementation on older Intel hardware.
+> [!WARNING]
+> **Intel CPU requirement.** The prebuilt Apple x86_64 slices intentionally
+> retain AVX2/BMI2 performance and require a Haswell-class Intel CPU or newer.
+> Reckless does not dispatch at runtime from this binary to a baseline
+> implementation on older Intel hardware.
 
----
+> [!NOTE]
+> **Linux host behavior.** Linux and other non-Android source-arm builds use
+> link-compatible host stubs; they validate the package surface but do not
+> provide a live Reckless engine. Apple uses the binary engine, while Android
+> can link a separately cross-built Rust archive as described below.
 
 ## Architecture
 
-```
+```text
 SwiftReckless/
-├── Package.swift                     # SPM manifest — dual arm (binary xcframework / source),
-│                                     #   CReckless + SwiftReckless + reckless-smoke + tests
+├── Package.swift                     # SwiftPM manifest — binary XCFramework or source arm,
+│                                     #   with CReckless, SwiftReckless, reckless-smoke, and tests
 ├── Sources/
 │   ├── CReckless/
 │   │   ├── include/
@@ -62,11 +66,11 @@ SwiftReckless/
 │       └── main.swift                  # End-to-end UCI smoke executable (`swift run reckless-smoke`)
 ├── Tests/
 │   └── SwiftRecklessTests/
-│       ├── SwiftRecklessTests.swift    # Offline loader + output-cancellation suites + net-guarded live engine smoke
+│       ├── SwiftRecklessTests.swift    # Offline loader, output cancellation, and net-guarded live engine smoke
 │       ├── RecklessNetworkLoaderCancellationTests.swift  # hermetic Transport-seam download/cancellation suite
 │       └── TransportSpy.swift
 ├── rust/                              # Rust FFI crate (creckless)
-│   ├── Cargo.toml                      # [lib] staticlib+rlib; reckless = maintained-fork git dep
+│   ├── Cargo.toml                      # [lib] staticlib and rlib; Reckless = maintained-fork Git dependency
 │   ├── examples/
 │   │   ├── ffi_smoke.rs                # standalone C-ABI exercise
 │   │   ├── spike.rs
@@ -76,12 +80,12 @@ SwiftReckless/
 │   │   └── ffi.rs                      # extern "C" rk_ffi_* — real bodies, drive reckless::run_io
 │   └── tests/
 │       └── ffi_smoke.rs                # cargo-test C-ABI regression (net-guarded)
-├── Frameworks/                        # RecklessFFI.xcframework — COMMITTED (path-based main; rebuild only when the Rust changes)
-├── .github/workflows/                 # ci.yml (push/PR), release.yml (tested draft release + one-time tag), upstream-watch.yml (daily notify-only)
+├── Frameworks/                        # RecklessFFI.xcframework — committed (path-based main; rebuild only when Rust changes)
+├── .github/workflows/                 # ci.yml (push/PR), release.yml (tested draft release and one-time tag), upstream-watch.yml (daily notify-only)
 ├── docs-site/                         # MkDocs documentation site
 └── Tools/
     ├── build-macos.sh                 # macOS fat lib → xcframework
-    ├── build-xcframework.sh           # Full Apple gamut (iOS/macOS/Mac Catalyst/tvOS/watchOS/visionOS)
+    ├── build-xcframework.sh           # All supported Apple destinations
     └── build-android.sh               # Android staticlibs via cargo-ndk
 ```
 
@@ -89,11 +93,9 @@ SwiftReckless/
 
 | Layer | Target | Role |
 |---|---|---|
-| Rust crate | `creckless` (`crate-type = ["staticlib", "rlib"]`) | Runs Reckless's UCI loop on a background thread; exposes 4 `extern "C"` symbols |
+| Rust crate | `creckless` (`crate-type = ["staticlib", "rlib"]`) | Runs Reckless's UCI loop on a background thread; exposes four `extern "C"` symbols |
 | C shim | `CReckless` | `RecklessBridge.c` forwards `rk_*` → `rk_ffi_*`; `RecklessHostStubs.c` supplies no-op `rk_ffi_*` on non-Android hosts (source arm); the public C header is the Swift module |
-| Swift | `SwiftReckless` | `RecklessEngine` + `RecklessNetworkLoader`; cancellation-safe `RecklessOutput` plus an `AsyncStream` compatibility adapter |
-
----
+| Swift | `SwiftReckless` | `RecklessEngine` and `RecklessNetworkLoader`; cancellation-safe `RecklessOutput` with an `AsyncStream` compatibility adapter |
 
 ## C FFI ABI
 
@@ -128,16 +130,14 @@ lifetimes are supported by fork tag `swiftreckless-v0.9.1`: a clean
 lifecycle slot so a later `rk_create` can start a fresh engine. Overlapping
 lifetimes are still rejected with `NULL`.
 
----
-
 ## Build model
 
 `Package.swift` has two arms and selects between them from the environment:
 
 | Condition | Arm | What links |
 |---|---|---|
-| Apple host, default (and **always** under Xcode) | **binary** | `.binaryTarget` → `Frameworks/RecklessFFI.xcframework` + `RecklessBridge.c` |
-| `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1` (Android / forced CLI) | **source** | `RecklessBridge.c` + `RecklessHostStubs.c`; on Android, links `libcreckless.a` from `RECKLESS_LIB_DIR` |
+| Apple host, default (and **always** under Xcode) | **binary** | `.binaryTarget` → `Frameworks/RecklessFFI.xcframework` and `RecklessBridge.c` |
+| `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1` (Android / forced CLI) | **source** | `RecklessBridge.c` and `RecklessHostStubs.c`; on Android, links `libcreckless.a` from `RECKLESS_LIB_DIR` |
 
 - **`SWIFTRECKLESS_FORCE_SOURCE_BUILD=1`** forces the source arm.
 - **`RECKLESS_LIB_DIR`** points at the directory holding the cross-built
@@ -145,24 +145,24 @@ lifetimes are still rejected with `NULL`.
   `rust/target/<triple>/release` for a cross-build).
 - **Under Xcode** (`__CFBundleIdentifier == com.apple.dt.Xcode`) the binary arm is
   always used, so an Xcode build never tries to link an Android ELF.
-- On any non-Android host in the source arm, `RecklessHostStubs.c` provides no-op
-  `rk_ffi_*` symbols so the Skip/Gradle host-introspection pass links cleanly.
+- On Linux and every other non-Android host in the source arm,
+  `RecklessHostStubs.c` provides no-op `rk_ffi_*` symbols so the Skip/Gradle
+  host-introspection pass links cleanly. This configuration is build-only and
+  does not provide a live Reckless engine.
 
-The prebuilt `xcframework` is **committed** to `main` (a path-based binary target),
+The prebuilt XCFramework is committed to `main` as a path-based binary target,
 so a fresh clone links with a plain `swift build` on Apple — no rebuild needed.
 Rebuild it (see below) only when the Rust engine changes; the manual release
-workflow creates a detached tag commit whose binary target uses `url:` +
+workflow creates a detached tag commit whose binary target uses `url:` and
 `checksum:`, so the tag itself stays lean without mutating `main`.
 
 Quick sanity check:
 
 ```bash
-swift build                 # Apple host: binary arm, links the existing xcframework
+swift build                 # Apple host: binary arm, links the existing XCFramework
 swift run reckless-smoke    # drives uci → uciok end-to-end
-swift test                  # 4 suites: loader offline + output-cancellation + hermetic download/cancellation + net-guarded live engine smoke
+swift test                  # Four suites: offline, cancellation, hermetic download, and live smoke tests
 ```
-
----
 
 ## Building
 
@@ -170,54 +170,56 @@ swift test                  # 4 suites: loader offline + output-cancellation + h
 
 ```bash
 bash Tools/build-macos.sh   # produces Frameworks/RecklessFFI.xcframework
-swift build                 # binary arm links the freshly built xcframework
+swift build                 # binary arm links the freshly built XCFramework
 ```
 
 ### All Apple platforms (iOS, macOS, Mac Catalyst, tvOS, watchOS, visionOS)
 
 ```bash
 bash Tools/build-xcframework.sh
-# → Frameworks/RecklessFFI.xcframework  (10 slices — the full Apple gamut)
+# → Frameworks/RecklessFFI.xcframework (10 slices across supported destinations)
 ```
 
-The script installs the pinned stable 1.96.1 targets plus
-`nightly-2026-07-21` + `rust-src` for the Rust Tier-3 platforms
+The script installs the pinned stable 1.96.1 targets and
+`nightly-2026-07-21` with `rust-src` for the Rust Tier-3 platforms
 (tvOS/watchOS/visionOS), which it builds from source via `-Z build-std`. No
 manual `rustup target add` is required. These pins produced the committed
-xcframework and are also used by release CI.
+XCFramework and are also used by release CI.
 
-**Per-arch SIMD flags** (baked into the build scripts):
+**Per-architecture SIMD flags** (baked into the build scripts):
 
 | Arch | Flags | Rationale |
 |---|---|---|
-| `aarch64-*` | `+neon` | Always present on ARMv8-A; activates Reckless's vectorised NNUE accumulator |
+| `aarch64-*` | `+neon` | Always present on ARMv8-A; activates Reckless's vectorized NNUE accumulator |
 | `x86_64-apple-*` | `+avx2,+bmi2,+popcnt` | Optimized Intel build; requires Haswell-class AVX2/BMI2 hardware or newer |
 | `arm64_32-apple-watchos` | `+neon` | Physical Apple Watch architecture used before watchOS 26 |
-| `armv7-linux-androideabi` | `+neon,+vfpv3` | Present on all Android 5.0+ ARMv7 devices |
+| `armv7-linux-androideabi` | `+neon,+vfpv3` | Present on all ARMv7 devices running Android 5.0 or later |
 | `x86_64-linux-android` | `+avx2,+popcnt` | Optimized emulator/device build; requires AVX2 hardware |
-| `i686-linux-android` | `+sse4.2,+popcnt` | Requires SSE4.2 + POPCNT |
+| `i686-linux-android` | `+sse4.2,+popcnt` | Requires SSE4.2 and POPCNT |
 
-Reckless selects the vectorised vs scalar NNUE path at compile time via
+Reckless selects the vectorized or scalar NNUE path at compile time via
 `#[cfg(target_feature = "…")]`, so these flags directly activate the fast path. The
-xcframework carries per-arch slices with their SIMD code already baked in, so the
-consuming Swift package inherits the optimal path per device with no per-arch flags at
-the SPM level (same design as the Stockfish xcframework in
+XCFramework carries per-architecture slices with their SIMD code already baked in,
+so the consuming Swift package inherits the optimal path per device with no
+per-architecture flags at the SwiftPM level (the same design as the Stockfish
+XCFramework in
 [SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish)).
 
-> **Intel CPU requirement:** the prebuilt x86_64 slices intentionally favor
+> [!WARNING]
+> **Intel CPU requirement.** The prebuilt x86_64 slices intentionally favor
 > engine strength and require AVX2, BMI2, and POPCNT (Haswell-class or newer).
 > Reckless has no runtime SIMD dispatch. Supporting older Intel hardware would
 > require a separate baseline product or upstream multiversion dispatch.
 
 ### Android / Skip (SkipFuse)
 
-The Android build uses the **source arm**. Cross-build the staticlib, then point SPM at
-it with `RECKLESS_LIB_DIR`:
+The Android build uses the **source arm**. Cross-build the Rust static library,
+then point SwiftPM at it with `RECKLESS_LIB_DIR`:
 
 ```bash
 # Prerequisites
 cargo install cargo-ndk --version 4.1.2 --locked
-# NDK r26+ installed; set ANDROID_NDK_ROOT.
+# NDK r26 or newer installed; set ANDROID_NDK_ROOT.
 
 bash Tools/build-android.sh
 # → android-libs/{arm64-v8a,armeabi-v7a,x86_64,x86}/libcreckless.a
@@ -234,26 +236,27 @@ native output. Do not put these archives in Gradle `jniLibs`: that directory is
 for loadable `.so` libraries, and Android cannot load a `.a` at runtime. If the
 surrounding Skip/native build emits a `.so`, package that final shared library.
 
-The Android source arm currently supplies the archive path through a conditional
-SwiftPM `.unsafeFlags` linker setting. That works for the local/cross-build flow
-above, but SwiftPM can reject active unsafe flags when this package is consumed as
-a version-pinned remote dependency. Treat remote Android consumption as pending
-until the linkage is replaced and covered by an end-to-end remote-consumer test.
+> [!WARNING]
+> **Remote Android dependency limitation.** The Android source arm currently
+> supplies the archive path through a conditional SwiftPM `.unsafeFlags` linker
+> setting. This works for the local cross-build flow above, but SwiftPM can reject
+> active unsafe flags when the package is consumed as a version-pinned remote
+> dependency. Remote Android support therefore remains pending until that linkage
+> is replaced and covered by an end-to-end remote-consumer test.
 
-The Skip/SkipFuse bridge pattern (`/* SKIP @bridge */` + SwiftJNI `callStatic`)
+The Skip/SkipFuse bridge pattern (`/* SKIP @bridge */` and SwiftJNI `callStatic`)
 used by the consuming application applies unchanged. Generic consumers
 can use the Stockfish-compatible `send(_:)` / `output` surface, but must retain
 one long-lived `output` subscription. Concrete consumers that cancel and restart
 reads on the same process-lifetime engine must use `cancellationSafeOutput`;
-cancelling one of its waiters does not finish output for later searches.
-
----
+canceling one of its waiters does not finish output for later searches.
 
 ## Reckless engine facts
 
 | Property | Value |
 |---|---|
 | Upstream repo | https://github.com/codedeliveryservice/Reckless |
+| Version mapping | Upstream Reckless `0.9` maps to SwiftReckless `0.9.x`; wrapper-only releases increment the patch component |
 | Dependency actually used | Maintained fork **`github.com/fianchettochess/Reckless.git`**, pinned tag `swiftreckless-v0.9.1` (commit `de35beac9074137e9776af14859bf6f40562553c`), `default-features = false` (branch `swiftreckless` on upstream tag `v0.9.0`; five patches: a `[lib]` target, runtime NNUE loading, per-instance I/O, terminal-position guarding, and restart-safe lifecycle cleanup) |
 | Language | Rust |
 | License | **AGPL-3.0** |
@@ -261,7 +264,6 @@ cancelling one of its waiters does not finish output for later searches.
 | `crate-type` | Upstream Reckless is a **binary-only** crate — no library target, no FFI planned upstream. The fork adds a `[lib]` (`rlib`). The C-linkable `staticlib` comes from the wrapper crate `creckless` (`["staticlib", "rlib"]`). No `cdylib` anywhere. |
 | NNUE | `v54-5478683c.nnue`, loaded at **runtime** from the `network_path` passed to `rk_create` (the fork removed upstream's compile-time `include_bytes!` embed) |
 | Weight provisioning | Downloaded by `RecklessNetworkLoader` on first launch to a caller-chosen directory; the runtime path is handed to `rk_create`. Net is never baked into the binary. |
-| Strength | ~3000 Elo (Super-GM level) |
 | Effective dependencies | With `default-features = false`, transitively just `libc`. `cc`/`bindgen` are optional build-deps behind the disabled `syzygy` feature. |
 
 **Licensing.** SwiftReckless is distributed under the **GNU Affero General Public
@@ -274,37 +276,34 @@ offer source for both engines. **AGPL §13 (Remote Network Interaction):** if yo
 run a modified version as part of a network-accessible service, you must offer that
 service's users the Corresponding Source of your modified version.
 
----
-
 ## NNUE weight provisioning
 
-The network (`v54-5478683c.nnue`) is **NEVER committed** to this repo or to any
-Fianchetto repo (`.gitignore` bans `*.nnue` and `networks/`).
+The network (`v54-5478683c.nnue`) is not committed to this repository or any
+Fianchetto repository (`.gitignore` excludes `*.nnue` and `networks/`).
 
-Runtime strategy (same as Stockfish nets in
+Runtime strategy (the same as Stockfish networks in
 [SwiftStockfish](https://github.com/fianchettochess/SwiftStockfish)):
+
 - `RecklessNetworkLoader().ensure(in:)` downloads from the
   [RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/)
   release page on first launch (~60 MB).
 - The complete pinned SHA-256 digest is verified after download on Apple,
   Linux, and Android (CryptoKit on Apple; swift-crypto elsewhere).
-- On Android the same loader runs (Foundation + URLSession via swift-corelibs-foundation).
+- On Android the same loader runs (Foundation and URLSession via swift-corelibs-foundation).
 - The downloaded path is passed to `RecklessEngine(networkDirectory:)` →
-  `rk_create(network_path)`, which loads it at runtime. When Reckless upgrades its net,
-  update `RecklessNetworkLoader.network` (filename + `sha256` + `downloadURL`) — no Rust
-  rebuild is needed, because the net is not baked into the crate.
+  `rk_create(network_path)`, which loads it at runtime. When Reckless upgrades its network,
+  update `RecklessNetworkLoader.network` (`filename`, `sha256`, and `downloadURL`) — no Rust
+  rebuild is needed because the network is not baked into the crate.
 
----
-
-## Toolchain prerequisites (full list)
+## Toolchain prerequisites
 
 ```bash
 # Rust — use rustup (NOT `brew install rust`, which is not rustup-managed and
 # cannot install the pinned/cross-compile toolchains below).
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Tools/build-*.sh installs stable 1.96.1 and its required targets.
-# The full Apple builder additionally installs nightly-2026-07-21 + rust-src.
+# The Tools/build-*.sh scripts install stable 1.96.1 and its required targets.
+# The full Apple builder additionally installs nightly-2026-07-21 and rust-src.
 
 # Android build tool
 cargo install cargo-ndk --version 4.1.2 --locked
@@ -312,8 +311,6 @@ cargo install cargo-ndk --version 4.1.2 --locked
 # Android NDK (via Android Studio SDK Manager or brew)
 # Set: export ANDROID_NDK_ROOT=~/Library/Android/sdk/ndk/<version>
 ```
-
----
 
 ## Testing
 
@@ -327,7 +324,7 @@ cargo test --manifest-path rust/Cargo.toml --locked
 1. **`RecklessNetworkLoader offline tests`** — always runs. Pinned `v54` net spec,
    full-SHA-256 verification (including a same-prefix/wrong-tail regression), the
    SHA-prefix/filename encoding, nil-init without the net, and the prune sweep
-   (orphaned `.part` staging files + stale nets).
+   (orphaned `.part` staging files and stale networks).
 2. **`Reckless output cancellation`** — the `RecklessOutput` channel:
    pre-subscription buffering, per-waiter cancellation, iterator reuse, and the
    single-forwarding-consumer `output` regression.
@@ -335,34 +332,45 @@ cargo test --manifest-path rust/Cargo.toml --locked
    and staging-file lifecycle via the injected `Transport` seam (no network).
 4. **`RecklessEngine smoke`** — a real `uci → uciok / isready → readyok / go → bestmove`
    handshake against the live engine. It is **guarded on the staged net** at
-   `rust/networks/`: present → the handshake runs; absent → a RECORDED skip
+   `rust/networks/`: present → the handshake runs; absent → a recorded skip
    (visible in the test log, never a silent pass). It also skips on the
    forced-source macOS arm (`SWIFTRECKLESS_FORCE_SOURCE_BUILD=1`), which links
-   no-op host stubs rather than the real engine.
+   no-op host stubs rather than the real engine. Linux source-arm builds use the
+   same host stubs and cannot run the live-engine suite.
    `rust/tests/ffi_smoke.rs` is the equivalent C-ABI regression under `cargo test`.
 
-There is no `SWIFTRECKLESS_INTEGRATION` env var or separate integration target — gating
-is by net presence at `rust/networks/` plus not being a forced-source stub build.
+There is no `SWIFTRECKLESS_INTEGRATION` environment variable or separate
+integration target. Apple binary-arm execution is gated by network presence at
+`rust/networks/`; non-Android source-arm builds use host stubs and cannot run the
+live engine.
 
 ## Releasing
 
 Do not push or re-cut a version tag. In **Actions → Release binary → Run
-workflow**, choose the current default branch and enter a new stable `N.N.N` version. The
-workflow rejects existing tags/releases, rebuilds and inspects all XCFramework
-slices, stages and verifies the NNUE network, and runs both locked Rust tests and
-the live Swift engine suite against that artifact's macOS arm64 slice. Trusted
+workflow**, choose the current default branch and enter a new stable `N.N.N`
+version. The workflow rejects existing tags and releases, rebuilds and inspects
+all XCFramework slices, stages and verifies the NNUE network, and runs both
+locked Rust tests and the live Swift engine suite against that artifact's macOS
+arm64 slice. Trusted
 Intel CI separately live-tests the committed AVX2/BMI2 x86_64 slice. The release
 job uses `macos-26` with Xcode 26.6, then archives and byte-verifies the asset,
 creates the URL-based manifest commit on a detached
 HEAD, and uploads/re-downloads the asset through a draft release before
 publishing. The final tag is created once; `main` remains path-based.
 
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for Swift and Rust testing, generated
+artifact, privacy, and source-provenance requirements. Report security issues
+using the private process in [SECURITY.md](SECURITY.md), not a public issue
+containing sensitive details.
+
 ## License
 
-AGPL-3.0 — see [LICENSE](LICENSE) — matching the upstream
-[Reckless](https://github.com/codedeliveryservice/Reckless) engine this
-package builds from source. The runtime NNUE network is downloaded directly
-from [RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks)
-and is not redistributed in this repository. See
+SwiftReckless uses AGPL-3.0, matching the upstream
+[Reckless](https://github.com/codedeliveryservice/Reckless) engine; see
+[LICENSE](LICENSE). The runtime NNUE network is downloaded directly from
+[RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks) and
+is not redistributed in this repository. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency and network
 provenance.

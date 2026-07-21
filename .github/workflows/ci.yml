@@ -66,6 +66,11 @@ jobs:
       SWIFTRECKLESS_FORCE_SOURCE_BUILD: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The trusted runner owns its workspace; avoid copying its account's
+          # global .gitconfig into the Actions log for safe-directory setup.
+          set-safe-directory: false
+          persist-credentials: false
       - name: Verify optimized Intel CPU features
         run: |
           FEATURES="$(sysctl -n machdep.cpu.leaf7_features)"
