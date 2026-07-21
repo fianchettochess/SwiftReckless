@@ -29,6 +29,9 @@ jobs:
   release:
     # Manual dispatch checks out only the current default-branch head, so fork
     # pull requests never execute code on this persistent release machine.
+    # SECURITY: Before public visibility, restrict the organization runner
+    # group to this exact workflow on refs/heads/main. These labels only route
+    # the job; they are not an authorization boundary.
     runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 240
     steps:
@@ -39,6 +42,9 @@ jobs:
           # The runner account owns its workspace; avoid importing its global
           # Git configuration solely to add a safe-directory exception.
           set-safe-directory: false
+          # Checkout removes its temporary token before subsequent steps. Git
+          # authentication is reintroduced only in the two controlled steps.
+          persist-credentials: false
 
       - name: Validate version, source revision, and collisions
         env:
@@ -46,6 +52,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Step-scoped authentication: no credential or extraheader is written
+          # to the runner's global or repository-local Git configuration.
+          AUTH_HEADER="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\r\n')"
+          echo "::add-mask::${AUTH_HEADER}"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0='http.https://github.com/.extraheader'
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_HEADER}"
+          export GIT_TERMINAL_PROMPT=0
+          unset AUTH_HEADER
+
           if ! printf '%s' "${VERSION}" | \
             grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
             echo "::error::invalid version '${VERSION}' — expected stable N.N.N"
@@ -93,7 +109,10 @@ jobs:
           test "$(uname -m)" = 'x86_64'
           test -d "${DEVELOPER_DIR}"
           test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 26.6'
+          test "$(xcodebuild -version | sed -n '2p')" = 'Build version 17F113'
+          test "$(xcrun swift --version | sed -n '1p')" = 'swift-driver version: 1.148.6 Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)'
           xcodebuild -version
+          xcrun swift --version
 
           LEAF7_FEATURES="$(sysctl -n machdep.cpu.leaf7_features)"
           BASE_FEATURES="$(sysctl -n machdep.cpu.features)"
@@ -200,9 +219,9 @@ jobs:
             exit 1
           fi
 
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m "Release ${VERSION}: host XCFramework as a release asset"
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "Release ${VERSION}: host XCFramework as a release asset"
           echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
       - name: Stage, verify, and publish the release
@@ -211,6 +230,16 @@ jobs:
           RELEASE_COMMIT: ${{ steps.release_commit.outputs.sha }}
         run: |
           set -euo pipefail
+          # Keep write-capable Git authentication inside this publication step;
+          # the environment disappears with its shell and never reaches tests.
+          AUTH_HEADER="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\r\n')"
+          echo "::add-mask::${AUTH_HEADER}"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0='http.https://github.com/.extraheader'
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_HEADER}"
+          export GIT_TERMINAL_PROMPT=0
+          unset AUTH_HEADER
+
           PREP_BRANCH="release-prep/${VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           PREP_PUSHED=0
           RELEASE_ID=''

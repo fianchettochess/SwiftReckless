@@ -44,7 +44,7 @@ set -euo pipefail
 
 # Prefer the conventional full Xcode bundle when the developer's global
 # xcode-select still points at CommandLineTools. This is process-local and does
-# not mutate their machine configuration; CI's setup-xcode action also works.
+# not mutate their machine configuration; CI pins DEVELOPER_DIR explicitly.
 if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode.app/Contents/Developer ]; then
   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 fi
