@@ -32,7 +32,7 @@ platform matrix and cross-compile details.
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.9"),
+    .package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.10"),
 ],
 targets: [
     .target(
