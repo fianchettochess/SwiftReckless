@@ -41,16 +41,27 @@ jobs:
           # global .gitconfig into the Actions log for safe-directory setup.
           set-safe-directory: false
           persist-credentials: false
-      - name: Verify pinned self-hosted toolchain and CPU
+      - name: Verify self-hosted toolchain and CPU capabilities
         run: |
           set -euo pipefail
           test "$(uname -m)" = 'x86_64'
           test -d "${DEVELOPER_DIR}"
-          test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 26.6'
-          test "$(xcodebuild -version | sed -n '2p')" = 'Build version 17F113'
-          test "$(xcrun swift --version | sed -n '1p')" = 'swift-driver version: 1.148.6 Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)'
+          test -x "${DEVELOPER_DIR}/usr/bin/xcodebuild"
+
+          XCODE_VERSION="$(xcodebuild -version | sed -n '1p')"
+          SWIFT_VERSION="$(xcrun swift --version | sed -n '1p')"
+          if ! grep -Eq '^Xcode 26([.][0-9]+)*$' <<< "${XCODE_VERSION}"; then
+            echo "::error::Xcode 26.x is required; found '${XCODE_VERSION}'"
+            exit 1
+          fi
+          if ! grep -Eq 'Apple Swift version 6([.][0-9]+)*([[:space:]]|$)' \
+            <<< "${SWIFT_VERSION}"; then
+            echo "::error::Apple Swift 6.x is required; found '${SWIFT_VERSION}'"
+            exit 1
+          fi
           xcodebuild -version
           xcrun swift --version
+          xcrun --sdk macosx --show-sdk-path
 
           LEAF7_FEATURES="$(sysctl -n machdep.cpu.leaf7_features)"
           BASE_FEATURES="$(sysctl -n machdep.cpu.features)"

@@ -411,9 +411,10 @@ versions outside the `.upstream-version`-derived `0.9.x` wrapper line, existing
 tags, and existing releases. It rebuilds and inspects all XCFramework slices, stages
 and verifies the NNUE network, and runs both locked Rust tests and the live Swift
 engine suite against that artifact's macOS x86_64 slice. The release job runs on
-the trusted self-hosted Intel Mac Pro, pins `/Applications/Xcode.app`, verifies
-the exact Xcode 26.6 build `17F113` and Swift 6.3.3 (`swift-driver` 1.148.6)
-toolchain, and checks AVX2/BMI2/POPCNT before building.
+the trusted self-hosted Intel Mac Pro, requires the full
+`/Applications/Xcode.app` installation with an Xcode 26.x / Apple Swift 6.x
+toolchain, and checks x86_64 plus AVX2/BMI2/POPCNT before building. Patch-level
+Xcode and Swift updates are accepted when those capabilities remain available.
 ARM slices are cross-built and architecture/deployment-validated; Xcode Cloud
 will provide arm64 runtime coverage once enabled. The workflow then archives
 and byte-verifies the asset, creates the URL-based manifest commit on a detached
