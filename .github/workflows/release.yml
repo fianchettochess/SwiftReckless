@@ -214,7 +214,10 @@ jobs:
           SWIFTRECKLESS_FORCE_SOURCE_BUILD: ''
         run: |
           set -euo pipefail
-          BARE_REPO="${RUNNER_TEMP}/SwiftReckless-release.git"
+          # SwiftPM derives an unnamed URL dependency's package identity from
+          # the repository basename. Keep it exactly "SwiftReckless" so the
+          # consumer's product dependency resolves as it does from GitHub.
+          BARE_REPO="${RUNNER_TEMP}/SwiftReckless.git"
           git clone --bare . "${BARE_REPO}"
           git --git-dir="${BARE_REPO}" tag 999.0.0 "${GITHUB_SHA}"
           SWIFTRECKLESS_TEST_URL="file://${BARE_REPO}" \
