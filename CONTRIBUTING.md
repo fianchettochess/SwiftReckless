@@ -10,7 +10,8 @@ Run the Swift and Rust suites before submitting a pull request:
 
 ```bash
 swift test
-cargo test --manifest-path rust/Cargo.toml --locked
+SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 swift test --scratch-path .build-source
+cargo test --manifest-path rust/Cargo.toml --locked --all-targets
 ```
 
 `rust-toolchain.toml` pins stable Rust 1.96.1. Full Apple artifact builds also
@@ -23,11 +24,18 @@ record a skip and the Rust smoke test returns without exercising the engine.
 Changes to the FFI, engine lifecycle, or binary artifact must be validated with
 that network staged.
 
-The source-arm build should also remain healthy:
+The forced-source test intentionally records a skip for the live-engine suite
+on macOS and Linux because those configurations link host stubs. With the
+network staged, validate the real Rust engine and terminal-position regression:
 
 ```bash
-SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 swift test
+cargo test --manifest-path rust/Cargo.toml --locked --all-targets
+cargo run --manifest-path rust/Cargo.toml --locked --example terminal_guard
 ```
+
+Release CI additionally runs the complete Swift suite on the freshly rebuilt
+Apple binary arm, where the live-engine test must execute, and builds/runs the
+SemVer-tagged fixture under `Tests/RemoteConsumer`.
 
 ## Generated artifacts and privacy
 
