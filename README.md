@@ -34,7 +34,7 @@ adaptation.
 Add SwiftReckless to your package dependencies:
 
 ```swift
-.package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.9")
+.package(url: "https://github.com/fianchettochess/SwiftReckless.git", from: "0.9.10")
 ```
 
 > [!WARNING]
