@@ -21,8 +21,9 @@ adaptation.
 > XCFramework committed as a path-based target. Hosted pull-request CI tests the
 > Rust FFI and Linux source arm; trusted macOS CI tests both package arms after a
 > push to `main` or an explicit manual dispatch. The manual release workflow
-> rebuilds the binary, stages the network, and validates the live Rust and Swift
-> engine before publication.
+> rebuilds the binary, stages the network, tests the Rust targets, exercises the
+> terminal guard, tests both Swift package arms and a versioned remote consumer,
+> and runs the live engine suites before publication.
 > With the network staged, `swift test` verifies the complete
 > `uci → uciok / isready → readyok / go → bestmove` exchange. The Fianchetto app
 > consumes the package on iOS and Android. The engine remains a pinned Git
@@ -360,8 +361,12 @@ cargo install cargo-ndk --version 4.1.2 --locked
 ## Testing
 
 ```bash
-swift test                    # Swift suites (see below)
-cargo test --manifest-path rust/Cargo.toml --locked
+swift test
+SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 swift test --scratch-path .build-source
+cargo test --manifest-path rust/Cargo.toml --locked --all-targets
+
+# With the NNUE network staged:
+cargo run --manifest-path rust/Cargo.toml --locked --example terminal_guard
 ```
 
 `Tests/SwiftRecklessTests` has four [swift-testing](https://github.com/apple/swift-testing) suites:
@@ -392,7 +397,8 @@ live engine.
 Linux CI also creates an ephemeral SemVer-tagged Git repository and builds the
 fixture in `Tests/RemoteConsumer` through a versioned `.package(url:)`
 dependency. This catches unsafe dependency settings that a root-package or
-local-path build would miss.
+local-path build would miss. The release workflow repeats that fixture on its
+trusted host after rebuilding the artifact.
 
 The pull-request-capable `ci.yml` workflow uses GitHub-hosted runners only. The
 separate `ci-macos-trusted.yml` workflow runs the source- and binary-arm macOS
@@ -408,10 +414,13 @@ Releases are produced by **Actions → Release binary → Run workflow**, not by
 pushing a tag. Choose the current default branch and enter a new stable `N.N.N`
 version. Existing versions are never re-cut or force-moved. The workflow rejects
 versions outside the `.upstream-version`-derived `0.9.x` wrapper line, existing
-tags, and existing releases. It rebuilds and inspects all XCFramework slices, stages
-and verifies the NNUE network, and runs both locked Rust tests and the live Swift
-engine suite against that artifact's macOS x86_64 slice. The release job runs on
-the trusted self-hosted Intel Mac Pro, requires the full
+tags, and existing releases. It rebuilds and inspects all XCFramework slices,
+then stages and verifies the NNUE network before running every Rust target,
+the terminal-position guard, the source-arm Swift suite, the rebuilt binary-arm
+Swift suite, and the SemVer remote-consumer fixture. The source arm deliberately
+uses host stubs, so its live-engine test records the expected skip; the binary
+arm must run the live handshake against the artifact's macOS x86_64 slice.
+The release job runs on the trusted self-hosted Intel Mac Pro, requires the full
 `/Applications/Xcode.app` installation with an Xcode 26.x / Apple Swift 6.x
 toolchain, and checks x86_64 plus AVX2/BMI2/POPCNT before building. Patch-level
 Xcode and Swift updates are accepted when those capabilities remain available.

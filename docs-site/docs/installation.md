@@ -85,9 +85,13 @@ bash Tools/build-xcframework.sh
 ```
 
 The Rust toolchain prerequisites are documented in [Build model](concepts/build-model.md).
-The manual release workflow builds and tests the exact XCFramework, stages it in
-a draft release, verifies the uploaded bytes, and creates the final tag once at a
-`url:` + `checksum:` manifest. Consuming a tagged version via SwiftPM therefore needs
+The manual release workflow builds and tests the exact XCFramework, runs the
+Rust targets and terminal-position guard with the verified network staged,
+tests both Swift package arms plus a SemVer-tagged remote consumer, stages the
+artifact in a draft release, verifies the uploaded bytes, and creates the final
+tag once at a `url:` + `checksum:` manifest. The source arm's live-engine test
+records an intentional skip because it links host stubs; the rebuilt binary arm
+runs the live handshake. Consuming a tagged version via SwiftPM therefore needs
 no local Rust build.
 
 ## Verifying the install

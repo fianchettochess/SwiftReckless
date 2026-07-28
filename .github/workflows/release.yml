@@ -181,11 +181,46 @@ jobs:
             '5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf' \
             'rust/networks/v54-5478683c.nnue' | shasum -a 256 -c -
 
-      - name: Test Rust FFI against the locked graph
-        run: cargo test --manifest-path rust/Cargo.toml --locked
+      - name: Test Rust targets against the locked graph
+        run: cargo test --manifest-path rust/Cargo.toml --locked --all-targets
 
-      - name: Test the freshly rebuilt binary and live engine
-        run: swift test --scratch-path .build-release
+      - name: Test the terminal-position guard
+        run: |
+          cargo run \
+            --manifest-path rust/Cargo.toml \
+            --locked \
+            --example terminal_guard
+
+      - name: Test the source arm (live smoke intentionally skipped)
+        env:
+          SWIFTRECKLESS_FORCE_SOURCE_BUILD: '1'
+        run: |
+          # This non-Android source arm deliberately links host stubs. The
+          # live Swift suite must report its recorded, intentional skip even
+          # though the NNUE file is staged; every offline Swift test still runs.
+          swift build --scratch-path .build-release-source
+          swift test --scratch-path .build-release-source
+
+      - name: Test the freshly rebuilt binary arm and live engine
+        env:
+          SWIFTRECKLESS_FORCE_SOURCE_BUILD: ''
+        run: |
+          test -f rust/networks/v54-5478683c.nnue
+          swift build --scratch-path .build-release-binary
+          swift test --scratch-path .build-release-binary
+
+      - name: Test a versioned remote consumer
+        env:
+          SWIFTRECKLESS_FORCE_SOURCE_BUILD: ''
+        run: |
+          set -euo pipefail
+          BARE_REPO="${RUNNER_TEMP}/SwiftReckless-release.git"
+          git clone --bare . "${BARE_REPO}"
+          git --git-dir="${BARE_REPO}" tag 999.0.0 "${GITHUB_SHA}"
+          SWIFTRECKLESS_TEST_URL="file://${BARE_REPO}" \
+            swift run \
+              --package-path Tests/RemoteConsumer \
+              --scratch-path "${RUNNER_TEMP}/remote-consumer-release"
 
       - name: Archive and verify the exact asset
         id: checksum
