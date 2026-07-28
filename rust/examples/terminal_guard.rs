@@ -37,8 +37,12 @@ impl Collector {
 }
 
 /// # Safety
-/// `context` is a `*const Collector`; `line` is a valid NUL-terminated C string.
+/// `context` is a `*const Collector`; a non-null `line` is a valid
+/// NUL-terminated C string. A null `line` is the documented EOF sentinel.
 unsafe extern "C" fn collect_line(line: *const c_char, context: *const c_void) {
+    if line.is_null() {
+        return;
+    }
     let s = unsafe { CStr::from_ptr(line) }.to_string_lossy().to_string();
     let collector = unsafe { &*(context as *const Collector) };
     collector.lines.lock().unwrap().push(s);
