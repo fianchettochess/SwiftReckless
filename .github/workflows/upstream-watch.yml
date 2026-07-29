@@ -1,4 +1,4 @@
-name: Upstream watch
+name: SwiftReckless — Watch upstream Reckless
 
 # Daily check for a newer upstream Reckless STABLE release. If upstream's
 # `releases/latest` tag differs from the pinned `.upstream-version`, open ONE
@@ -25,6 +25,7 @@ permissions:
 
 jobs:
   watch:
+    name: SwiftReckless — compare pinned vs upstream Reckless
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

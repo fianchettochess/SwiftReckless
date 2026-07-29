@@ -1,4 +1,4 @@
-name: Trusted macOS CI
+name: SwiftReckless — CI (macOS source + binary arms)
 
 # Persistent self-hosted runners must never execute pull-request code. This
 # workflow exercises both package arms only after a push to main or an explicit
@@ -22,7 +22,7 @@ env:
 
 jobs:
   macos-self-hosted:
-    name: macOS — self-hosted (Intel Mac Pro, source and binary arms)
+    name: SwiftReckless — source/binary tests (macOS, Intel self-hosted)
     # SECURITY: Before public visibility, restrict the organization runner
     # group to this exact workflow on refs/heads/main. These labels only route
     # the job; they are not an authorization boundary.
