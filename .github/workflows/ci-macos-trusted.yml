@@ -1,7 +1,7 @@
-name: SwiftReckless — CI (macOS source + binary arms)
+name: SwiftReckless — CI (macOS source stubs + prebuilt XCFramework)
 
 # Persistent self-hosted runners must never execute pull-request code. This
-# workflow exercises both package arms only after a push to main or an explicit
+# workflow exercises both delivery paths only after a push to main or an explicit
 # trusted manual dispatch. The Release workflow independently rebuilds and
 # validates the exact artifact it publishes.
 
@@ -22,20 +22,21 @@ env:
 
 jobs:
   macos-self-hosted:
-    name: SwiftReckless — source/binary tests (macOS, Intel self-hosted)
+    name: SwiftReckless — source-stub + XCFramework tests (Intel self-hosted macOS)
     # SECURITY: Before public visibility, restrict the organization runner
     # group to this exact workflow on refs/heads/main. These labels only route
     # the job; they are not an authorization boundary.
     runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 45
     env:
-      # Force the source arm past the prebuilt RecklessFFI.xcframework
+      # Force the source-stub path past the prebuilt RecklessFFI.xcframework
       # (committed, ~150 MB — forced off here so this job exercises the
-      # stub/source arm). The binary arm is tested below, and a freshly rebuilt
+      # host-stub path). The prebuilt path is tested below, and a freshly rebuilt
       # artifact is validated by the Release workflow.
       SWIFTRECKLESS_FORCE_SOURCE_BUILD: '1'
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout SwiftReckless
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The trusted runner owns its workspace; avoid copying its account's
           # global .gitconfig into the Actions log for safe-directory setup.
@@ -68,13 +69,13 @@ jobs:
           grep -qw AVX2 <<< "${LEAF7_FEATURES}"
           grep -qw BMI2 <<< "${LEAF7_FEATURES}"
           grep -qw POPCNT <<< "${BASE_FEATURES}"
-      - name: swift build
+      - name: Build source-stub package path
         run: swift build
-      - name: swift test
+      - name: Test source-stub package path
         # The NNUE-guarded live engine smoke test skips cleanly when the
         # net file is absent (gitignored). All other tests run normally.
         run: swift test
-      - name: Binary-arm live package tests
+      - name: Test prebuilt-XCFramework path with live engine
         env:
           SWIFTRECKLESS_FORCE_SOURCE_BUILD: ''
         run: |
