@@ -1,4 +1,4 @@
-name: CI
+name: SwiftReckless — CI (Linux + Rust)
 
 # Hosted CI for the Rust FFI and Linux SOURCE arm (host stubs). This is the only
 # pull_request-capable workflow, so untrusted changes never run on a persistent
@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   rust:
-    name: Rust FFI
+    name: SwiftReckless — Rust FFI tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -35,7 +35,7 @@ jobs:
         run: cargo test --manifest-path rust/Cargo.toml --locked
 
   linux-x86_64:
-    name: Linux x86_64 (source arm)
+    name: SwiftReckless — source-arm tests (Linux x86_64)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Exercise the package's declared minimum tools version, not a floating SDK.

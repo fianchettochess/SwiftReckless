@@ -1,4 +1,4 @@
-name: Release binary
+name: SwiftReckless — Release XCFramework
 
 # Releases are deliberately manual. The workflow starts from the current
 # default-branch commit, rebuilds and tests the exact XCFramework, creates the
@@ -27,6 +27,7 @@ env:
 
 jobs:
   release:
+    name: SwiftReckless — build/publish XCFramework release
     # Manual dispatch checks out only the current default-branch head, so fork
     # pull requests never execute code on this persistent release machine.
     # SECURITY: Before public visibility, restrict the organization runner
