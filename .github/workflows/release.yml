@@ -1,4 +1,5 @@
 name: SwiftReckless — Release XCFramework
+run-name: SwiftReckless XCFramework release · ${{ inputs.version }}
 
 # Releases are deliberately manual. The workflow starts from the current
 # default-branch commit, rebuilds and tests the exact XCFramework, creates the

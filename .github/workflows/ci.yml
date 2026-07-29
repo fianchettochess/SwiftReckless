@@ -1,11 +1,11 @@
 name: SwiftReckless — CI (Linux + Rust)
 
-# Hosted CI for the Rust FFI and Linux SOURCE arm (host stubs). This is the only
+# Hosted CI for the Rust FFI and Linux source-stub package path. This is the only
 # pull_request-capable workflow, so untrusted changes never run on a persistent
-# self-hosted machine. Trusted macOS source- and binary-arm coverage lives in
+# self-hosted machine. Trusted macOS source-stub and prebuilt-XCFramework coverage lives in
 # ci-macos-trusted.yml and runs only after a push to main or manual dispatch.
 #
-# The Linux source arm compiles the thin C bridge + RecklessHostStubs.c (no-op
+# The Linux source-stub path compiles the thin C bridge + RecklessHostStubs.c (no-op
 # rk_ffi_* symbols), proving the package builds and tests without the binary
 # engine. The NNUE net is gitignored, so its live-engine smoke test records a
 # skip. The Release workflow separately rebuilds the exact binary, stages the
@@ -30,21 +30,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: cargo test
+      - name: Checkout SwiftReckless
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test Rust FFI crate
         run: cargo test --manifest-path rust/Cargo.toml --locked
 
   linux-x86_64:
-    name: SwiftReckless — source-arm tests (Linux x86_64)
+    name: SwiftReckless — source-stub package tests (Linux x86_64)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Exercise the package's declared minimum tools version, not a floating SDK.
     container: swift:6.0.3-jammy
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: swift build
+      - name: Checkout SwiftReckless
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build source-stub package path
         run: swift build
-      - name: swift test
+      - name: Test source-stub package path
         run: swift test
       - name: Versioned remote-consumer build
         shell: bash
