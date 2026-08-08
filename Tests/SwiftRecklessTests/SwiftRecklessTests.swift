@@ -6,6 +6,9 @@ import CryptoKit
 import Crypto
 #endif
 @testable import SwiftReckless
+// Imported directly so the backend test can compare the Swift report against
+// the C bridge's own answer rather than against itself.
+import CReckless
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Suite 1 — Offline / pure-logic (always run, no engine, no net)
@@ -229,6 +232,62 @@ struct RecklessOutputTests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Suite 1b — Backend reporting (always runs, no engine, no net)
+// ─────────────────────────────────────────────────────────────────────────────
+// The stub backend is a supported configuration; an UNDETECTED stub backend is
+// the bug this package refuses to ship. These tests hold the reporting honest.
+
+@Suite("Reckless backend reporting")
+struct RecklessBackendTests {
+
+    @Test("current mirrors the C bridge's compile-time report")
+    func currentMirrorsBridge() {
+        #expect((RecklessBackend.current == .stub) == (rk_backend_is_stub() != 0))
+        #expect(RecklessBackend.isEngineAvailable == (RecklessBackend.current == .real))
+    }
+
+    // A recorded skip on a real link, never a silent pass (the trait, not a
+    // `#require` guard: a guard would fail the run on every real build).
+    @Test(
+        "a stub build cannot start an engine, whatever the net directory holds",
+        .enabled(if: RecklessBackend.current == .stub, "only meaningful on a stub link")
+    )
+    func stubBuildNeverStarts() throws {
+        // Point at the real staged dev net if the developer has one: on a stub
+        // build even a perfectly provisioned directory must still fail, which
+        // is exactly why the failure needs a name of its own.
+        let netDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("rust/networks", isDirectory: true)
+        #expect(RecklessEngine(networkDirectory: netDir) == nil)
+    }
+
+    // CI's contract test. A build pipeline knows which backend it MEANT to
+    // produce; without this, "Linux built green" is equally consistent with
+    // "linked the real archive" and "silently linked stubs" — and the second
+    // is the failure this whole design targets. Set
+    // SWIFTRECKLESS_EXPECT_BACKEND=real|stub in any job that has an opinion.
+    @Test(
+        "linked backend matches SWIFTRECKLESS_EXPECT_BACKEND",
+        .enabled(
+            if: ProcessInfo.processInfo.environment["SWIFTRECKLESS_EXPECT_BACKEND"] != nil,
+            "set SWIFTRECKLESS_EXPECT_BACKEND=real|stub to assert the link"
+        )
+    )
+    func matchesDeclaredExpectation() throws {
+        let raw = try #require(ProcessInfo.processInfo.environment["SWIFTRECKLESS_EXPECT_BACKEND"])
+        let expected = try #require(
+            RecklessBackend(rawValue: raw),
+            "SWIFTRECKLESS_EXPECT_BACKEND must be exactly 'real' or 'stub', got '\(raw)'"
+        )
+        #expect(RecklessBackend.current == expected,
+                "build linked the \(RecklessBackend.current) backend but the job declared \(expected)")
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Suite 2 — Engine smoke (net-guarded; runs by default when the net is staged)
 // ─────────────────────────────────────────────────────────────────────────────
 // Serialized: at most one engine may be live at a time (overlap is rejected at
@@ -249,17 +308,17 @@ struct RecklessEngineSmokeTests {
         return FileManager.default.fileExists(atPath: net.path) ? dir : nil
     }
 
-    /// True on the forced-source macOS arm, which intentionally links host
-    /// no-op stubs (only Android links the source-built Rust archive). A
-    /// developer may still have the ignored net staged locally, which must
-    /// not turn this host-introspection configuration into a false
-    /// integration failure.
+    /// True when this build intentionally links the host no-op stubs. A
+    /// developer may still have the ignored net staged locally, which must not
+    /// turn a stub configuration into a false integration failure.
+    ///
+    /// This used to be inferred from `os(macOS) && SWIFTRECKLESS_FORCE_SOURCE_BUILD`
+    /// — a guess about the build, made from the environment. It is now the
+    /// build's own report (`rk_backend_is_stub()`), which is exact on every
+    /// platform and stays correct for the desktop arm, where the same env var
+    /// can mean either backend depending on whether an archive was supplied.
     private static var isForcedSourceStubBuild: Bool {
-        #if os(macOS)
-        return ProcessInfo.processInfo.environment["SWIFTRECKLESS_FORCE_SOURCE_BUILD"] == "1"
-        #else
-        return false
-        #endif
+        RecklessBackend.current == .stub
     }
 
     /// Race the output stream against a timeout; true if a matching line arrives.

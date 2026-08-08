@@ -87,6 +87,25 @@ void rk_set_output_callback(RKEngineRef engine,
 /// Thread-safe: can be called from any thread.
 void rk_send_command(RKEngineRef engine, const char *command);
 
+/// Report whether this build linked the REAL Reckless engine or the no-op
+/// host stubs.
+///
+/// Returns 0 when the four `rk_*` entry points above reach a real engine, and 1
+/// when they reach `RecklessHostStubs.c`, whose `rk_create` always returns NULL.
+///
+/// WHY THIS EXISTS. The package has a legitimate stub configuration — the
+/// Skip/Gradle host-introspection pass must link without the Android ELF
+/// archive, and a Linux/Windows consumer that has supplied no archive must
+/// still build. What is NOT acceptable is being unable to tell the two apart:
+/// a stub build otherwise looks exactly like a real build whose NNUE net is
+/// missing. Check this (or Swift's `RecklessBackend.current`) before concluding
+/// that an engine failure is a data problem.
+///
+/// This is a COMPILE-TIME constant baked in by the arm that built CReckless; it
+/// performs no work and is safe to call at any time, including before
+/// `rk_create`.
+int rk_backend_is_stub(void);
+
 #ifdef __cplusplus
 }
 #endif

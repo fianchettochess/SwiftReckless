@@ -63,6 +63,18 @@ func waitFor(
     return false
 }
 
+// ── Report the linked backend, and refuse to "pass" on stubs ─────────────────
+// The stub backend links cleanly and does nothing; a smoke test that reported a
+// generic init failure there would leave the reader guessing whether the net or
+// the build was at fault. Name it, and fail before touching the filesystem.
+err("backend: \(RecklessBackend.current)")
+guard RecklessBackend.current == .real else {
+    err("FAIL — this build links the no-op stub backend; there is no engine to smoke.")
+    err("       Linux/Windows: build the archive (Tools/build-desktop.sh), put its")
+    err("       directory on the linker search path, and set SWIFTRECKLESS_LINK_ARCHIVE=1.")
+    exit(1)
+}
+
 // ── Locate the pre-placed dev net ─────────────────────────────────────────────
 let sourceFileDir = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()   // Sources/reckless-smoke
