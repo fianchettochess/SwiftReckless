@@ -46,6 +46,29 @@ BUILD_TMP_DIR="${TMPDIR:-/tmp}"
 BUILD_TMP_DIR="${BUILD_TMP_DIR%/}"
 RUSTUP="$BUILD_CARGO_HOME/bin/rustup"; [ -x "$RUSTUP" ] || RUSTUP="$(command -v rustup)"
 STABLE_TOOLCHAIN="${RUST_STABLE_TOOLCHAIN:-1.96.1}"
+# CPU BASELINE: HASWELL (2013) OR NEWER ON x86_64. DECIDED, NOT INHERITED.
+#
+# Reckless selects its SIMD at COMPILE time and performs no runtime dispatch, so
+# an archive built with these features does not degrade on an older CPU — it
+# executes an illegal instruction and the process dies with SIGILL. There is no
+# graceful path, which is why this is a shipping decision rather than a tuning
+# knob.
+#
+# The default matches build-xcframework.sh's Intel slice, but the reasoning is
+# NOT the same and should not be quietly reused a third time. On Apple the
+# baseline was free: every Mac in the supported range has AVX2. Desktop
+# Windows and Linux reach a much broader population, so the owner made the call
+# explicitly on 2026-08-08 — keep AVX2 and document the requirement:
+#
+#   * Windows: no practical exposure. Pre-Haswell parts predate TPM 2.0, so
+#     those machines are not Windows 11 capable in the first place.
+#   * Linux: the TPM argument does NOT apply — nothing stops a 2012 Linux
+#     desktop. The exposure is real but small, and it is accepted on the
+#     grounds that anyone still running such a machine can rebuild with a
+#     lower baseline, which is exactly what the override below is for.
+#
+# To build for an older baseline:  RECKLESS_TARGET_FEATURES=+popcnt ./build-desktop.sh
+# Expect a measurable strength loss; the engine is SIMD-bound.
 TARGET_FEATURES="${RECKLESS_TARGET_FEATURES:-+avx2,+bmi2,+popcnt}"
 
 # CARGO_ENCODED_RUSTFLAGS keeps paths with spaces intact. Broad home mapping
