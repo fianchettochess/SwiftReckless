@@ -14,6 +14,7 @@
 //   dependency) in-process.
 
 #include "RecklessBridge.h"
+#include "RecklessBackend.h"
 #include <stddef.h>
 
 // ── Rust FFI symbols (rk_ffi_* prefix) ───────────────────────────────────────
@@ -45,4 +46,13 @@ void rk_set_output_callback(RKEngineRef engine,
 
 void rk_send_command(RKEngineRef engine, const char *command) {
     rk_ffi_send_command(engine, command);
+}
+
+// ── Backend report ───────────────────────────────────────────────────────────
+// Compiled in BOTH arms, and in the source arm it is compiled from the same
+// RECKLESS_BACKEND_IS_STUB expression that decides whether RecklessHostStubs.c
+// defines anything. That shared condition is the point: this function cannot
+// drift from the backend it describes.
+int rk_backend_is_stub(void) {
+    return RECKLESS_BACKEND_IS_STUB;
 }

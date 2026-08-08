@@ -9,14 +9,30 @@ CI builds that need to produce fresh XCFrameworks.
 | Condition | Arm | What links |
 |---|---|---|
 | Apple host, default (and always under Xcode) | **binary** | `.binaryTarget` → `Frameworks/RecklessFFI.xcframework` + `RecklessBridge.c` |
-| Non-Apple host, or `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1` in an Apple command-line build | **source** | `RecklessBridge.c` + `RecklessHostStubs.c`; Android integration also links a cross-built `libcreckless.a` |
+| Non-Apple host, or `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1` in an Apple command-line build | **source** | `RecklessBridge.c`, plus `RecklessHostStubs.c` on any platform not told an archive is coming. Android links a cross-built `libcreckless.a`; Linux and Windows link `libcreckless.a` / `creckless.lib` under `SWIFTRECKLESS_LINK_ARCHIVE=1` |
 
 ### Environment variables
 
 | Variable | Effect |
 |---|---|
 | `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1` | Selects the source arm outside Xcode. Required for Android / Skip cross-builds; Xcode deliberately ignores it. |
-| `RECKLESS_LIB_DIR` | Integration input read by the consuming Android root package. It points to the directory containing the cross-compiled `libcreckless.a`; SwiftReckless does not embed this local path in its published manifest. |
+| `RECKLESS_LIB_DIR` | Integration input read by the consuming root package, on every platform. It points to the directory containing the built archive; SwiftReckless does not embed this local path in its published manifest, because a path could only become a link input through `.unsafeFlags`, which would make the package's products unusable to remote consumers. |
+| `SWIFTRECKLESS_LINK_ARCHIVE=1` | Desktop (Linux/Windows) opt-in, read by *this* manifest. A boolean, not a path: it declares that a real `creckless` archive is on the linker search path, so the package stops compiling stubs for those platforms and asks for the archive via `.linkedLibrary` — a safe build setting that stays legal in a tagged dependency. All of its effects are scoped `.when(platforms: [.linux, .windows])`. |
+| `SWIFTRECKLESS_EXPECT_BACKEND=real\|stub` | Test-suite assertion. Fails the run if the build linked the other backend; records a skip when unset. Set it in any CI job that has an opinion about what it just built. |
+
+### Which backend did this build get?
+
+The source arm's stub configuration is legitimate — it keeps the Skip/Gradle
+host-introspection link working, and it lets a desktop consumer with no archive
+still build — but it must never be silent. One preprocessor condition in
+`Sources/CReckless/RecklessBackend.h` decides whether the stubs are compiled, and
+the same condition is what `rk_backend_is_stub()` (C) and `RecklessBackend.current`
+(Swift) report, so the two cannot disagree. `RecklessEngine.init?` names the stub
+backend in its failure log, and `reckless-smoke` prints it and exits non-zero
+instead of reporting a generic engine failure.
+
+Opting in on desktop and then supplying no archive is a link error, never a quiet
+fallback to stubs.
 
 ### Xcode lock-in
 
@@ -144,12 +160,79 @@ SwiftReckless itself uses only the safe
 machine-local archive path in the root package avoids unsafe flags in the
 versioned dependency while preserving the required NDK C++ runtime link.
 
+## Linux and Windows (desktop)
+
+Desktop uses the source arm as well, in the same shape as Android: build the Rust
+static library, then hand it to the link. The difference is that the desktop
+archive is asked for by *name* — `.linkedLibrary("creckless")`, a safe build
+setting — and the consumer supplies only the search path, so no machine-local
+path has to enter any manifest.
+
+```bash
+bash Tools/build-desktop.sh linux    # → rust/target/x86_64-unknown-linux-gnu/release/libcreckless.a
+bash Tools/build-desktop.sh windows  # → rust/target/x86_64-pc-windows-msvc/release/creckless.lib
+```
+
+A `staticlib` is assembled by rustc's own archiver and needs no system linker, so
+both targets cross-build from any host.
+
+```bash
+# Linux
+export SWIFTRECKLESS_LINK_ARCHIVE=1
+export LIBRARY_PATH=$PWD/rust/target/x86_64-unknown-linux-gnu/release
+swift build            # or: swift build -Xlinker -L<that directory>
+```
+
+```powershell
+# Windows
+$env:SWIFTRECKLESS_LINK_ARCHIVE = '1'
+swift build -Xlinker "/LIBPATH:$PWD\rust\target\x86_64-pc-windows-msvc\release"
+```
+
+!!! warning "Windows: use `/LIBPATH:`, not `LIB`"
+    Defining `LIB` in an ordinary shell breaks the build: clang stops
+    auto-detecting the MSVC and Windows SDK library directories once `LIB` is
+    set, and the link then fails on `msvcrt.lib` / `oldnames.lib` /
+    `msvcprt.lib`, including while compiling the package manifest. `LIB` is only
+    safe to *append* to inside a Visual Studio developer command prompt.
+
+Verify the result instead of assuming it:
+
+```bash
+SWIFTRECKLESS_EXPECT_BACKEND=real swift test
+swift run reckless-smoke     # prints "backend: real", then uci → bestmove
+```
+
+### Native link dependencies
+
+Taken from `rustc --print native-static-libs` for this crate (the build script
+prints the current list on every run) and declared by the package under the
+opt-in:
+
+| Target | Needs |
+|---|---|
+| `x86_64-unknown-linux-gnu` | `-lm -ldl -lpthread -lrt -lutil`, plus `libc`/`libgcc_s` which the Swift driver already links. **No C++ runtime.** |
+| `x86_64-pc-windows-msvc` | `kernel32 ntdll userenv ws2_32 dbghelp legacy_stdio_definitions`, plus the default `msvcrt`. **No C++ runtime.** |
+
+`-lc++` remains Android-only: it is the NDK's requirement, not Reckless's.
+
+The desktop archives are not committed. A checkout without one links stubs and
+reports it.
+
 ## `RecklessHostStubs.c`
 
-In the source arm on non-Android hosts (e.g. a CI Linux host), the real Rust
-implementation symbols (`rk_ffi_*`) are not linked. `RecklessHostStubs.c` provides
-no-op implementations of those symbols so the Skip/Gradle host-introspection pass
-links cleanly without an Android NDK.
+In the source arm, any platform that has not been told a real archive is coming
+compiles this file, which provides no-op `rk_ffi_*` implementations. That covers
+the Skip/Gradle host-introspection pass (a macOS host build carrying the Android
+environment, which must link without the Android ELF) and a Linux/Windows
+consumer that has not opted in — both link cleanly and neither gets an engine.
+
+The guard is a single condition in `Sources/CReckless/RecklessBackend.h`:
+stubs are compiled unless `__ANDROID__` or `RECKLESS_LINK_ARCHIVE` says the real
+symbols are arriving from an archive. This matters for correctness, not just
+tidiness: a stub object file always beats an archive member (an archive is only
+searched for symbols still undefined), so compiling stubs alongside a real
+archive would silently produce a dead engine.
 
 ## The Reckless fork
 

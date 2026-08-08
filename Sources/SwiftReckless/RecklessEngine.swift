@@ -306,14 +306,37 @@ public final class RecklessEngine: @unchecked Sendable {
     ///   `v54-5478683c.nnue` (the required NNUE net).  Use
     ///   ``RecklessNetworkLoader/ensure(in:progress:)`` to provision it.
     ///
-    /// - Returns: `nil` if the net file is not present in `networkDirectory`,
-    ///   if the Rust FFI layer could not start it, if another engine is
-    ///   currently live, or if an earlier failed startup left its engine
-    ///   thread unjoined (which poisons the process's engine slot).
+    /// - Returns: `nil` if this build links the stub backend
+    ///   (``RecklessBackend/current`` is `.stub` — no engine exists to start),
+    ///   if the net file is not present in `networkDirectory`, if the Rust FFI
+    ///   layer could not start it, if another engine is currently live, or if
+    ///   an earlier failed startup left its engine thread unjoined (which
+    ///   poisons the process's engine slot). Each of these logs a distinct
+    ///   line to stderr; the stub case is a build-configuration problem and no
+    ///   amount of re-provisioning will fix it.
     public init?(networkDirectory: URL) {
         // One cached adapter per engine (creating the box spawns no task;
         // the forwarding consumer starts on `output`'s first access).
         self.forwardedOutput = RecklessForwardedOutput(storage: outputStorage)
+
+        // A stub build can never start an engine. Say so BEFORE the net check,
+        // because otherwise this failure is indistinguishable from a missing
+        // network file and a caller will keep re-provisioning a net that was
+        // never the problem. See `RecklessBackend`.
+        guard RecklessBackend.current == .real else {
+            recklessLog(
+                """
+                [RecklessEngine] this build links the no-op stub backend, not the \
+                Reckless engine — RecklessEngine cannot start. Check \
+                RecklessBackend.current before creating an engine. Desktop \
+                (Linux/Windows) builds need a creckless archive on the linker \
+                search path plus SWIFTRECKLESS_LINK_ARCHIVE=1; see the \
+                SwiftReckless README.
+                """
+            )
+            outputStorage.finish()
+            return nil
+        }
 
         // Build the full path to the net file and verify it exists before
         // handing it to the Rust FFI (which returns NULL on failure, but

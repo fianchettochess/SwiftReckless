@@ -22,7 +22,22 @@
 //
 // `__ANDROID__` is the reliable host-vs-device discriminator here (defined by
 // the aarch64-linux-android target triple; never on the host pass).
-#if !defined(__ANDROID__)
+//
+// DESKTOP (Linux / Windows): the same "the real symbols come from elsewhere"
+// condition now has a second trigger. A desktop consumer that opts in with
+// SWIFTRECKLESS_LINK_ARCHIVE=1 supplies a real `libcreckless.a` /
+// `creckless.lib`, and Package.swift then defines RECKLESS_LINK_ARCHIVE for
+// that platform. Both triggers are folded into RECKLESS_BACKEND_IS_STUB in the
+// private RecklessBackend.h so this file and `rk_backend_is_stub()` can never
+// disagree about which backend the build got.
+//
+// This guard MUST stay conservative: a stub object file beats an archive
+// member (the archive is only searched for symbols still undefined), so
+// compiling these bodies alongside a real archive would silently produce a
+// dead engine — the exact failure this package refuses to ship.
+#include "RecklessBackend.h"
+
+#if RECKLESS_BACKEND_IS_STUB
 
 #include <stddef.h>
 #include "RecklessBridge.h"
@@ -46,4 +61,4 @@ void rk_ffi_send_command(RKEngineRef engine, const char *command) {
     (void)engine; (void)command;
 }
 
-#endif /* !__ANDROID__ */
+#endif /* RECKLESS_BACKEND_IS_STUB */

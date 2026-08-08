@@ -15,10 +15,15 @@
 //                       library `libcreckless.a` via the `RecklessFFI`
 //                       binaryTarget (the Rust FFI crate at `rust/`, built by
 //                       Tools/build-xcframework.sh).  In the source arm
-//                       (Android / forced source) the same C bridge compiles;
-//                       `RecklessHostStubs.c` provides no-op symbols on
-//                       non-Android hosts. On Android, the root application
-//                       supplies the cross-built Rust archive as a link input.
+//                       (Android / desktop / forced source) the same C bridge
+//                       compiles; `RecklessHostStubs.c` provides no-op symbols
+//                       for any platform in that arm which has NOT been told
+//                       that a real archive is coming. On Android, and on
+//                       Linux/Windows under SWIFTRECKLESS_LINK_ARCHIVE=1, the
+//                       root application supplies the Rust archive as a link
+//                       input and the stubs compile to nothing.
+//                       `rk_backend_is_stub()` / `RecklessBackend.current`
+//                       report which of the two a build actually got.
 //
 //   SwiftReckless      — Swift-facing API: `RecklessEngine` (mirrors
 //                       `StockfishEngine`), `RecklessNetworkLoader` (fetches
@@ -33,6 +38,8 @@
 //   * Apple (binary arm): run `Tools/build-macos.sh` (or build-xcframework.sh)
 //     once to produce `Frameworks/RecklessFFI.xcframework`, then `swift build`.
 //   * Android: source arm via `cargo-ndk` + RECKLESS_LIB_DIR (see README).
+//   * Linux / Windows desktop: source arm via `Tools/build-desktop.sh` +
+//     SWIFTRECKLESS_LINK_ARCHIVE=1 and a linker search path (see README).
 //
 // The `binaryTarget` points to `Frameworks/RecklessFFI.xcframework`, which IS
 // committed (~148 MB, 10 slices, plain git — matches SwiftStockfish) so a fresh
@@ -73,6 +80,36 @@ let forceSource = Context.environment["SWIFTRECKLESS_FORCE_SOURCE_BUILD"] == "1"
 let underXcode = Context.environment["__CFBundleIdentifier"] == "com.apple.dt.Xcode"
 
 let useBinaryEngine = hostIsApple && (underXcode || !forceSource)
+
+// ── Desktop (Linux / Windows) real-engine opt-in ──────────────────────────────
+// SWIFTRECKLESS_LINK_ARCHIVE=1 declares "for this build I am supplying a real
+// creckless archive on the linker search path". It is a BOOLEAN, deliberately
+// not a path:
+//
+//   * A path could only be turned into a link input here with
+//     `.unsafeFlags(["-L…"])`, and unsafe flags in a VERSIONED dependency make
+//     its products unusable to every remote consumer — the precise property
+//     this manifest exists to protect (Tests/RemoteConsumer guards it in CI).
+//     A boolean needs only `.linkedLibrary`, which is a safe build setting and
+//     is legal in a tagged dependency.
+//
+//   * So RECKLESS_LIB_DIR keeps its documented meaning on EVERY platform,
+//     desktop included: it is an integration input for the ROOT application
+//     (or for Tools/build-desktop.sh, which turns it into a linker search
+//     path), never read by this dependency manifest. Reading it here would
+//     also quietly change the Android build, where it is always set.
+//
+// Failure behaviour is loud in both directions, which is the whole point:
+//   * opted in, no archive found      → the link fails at build time
+//                                        ("unable to find library -lcreckless",
+//                                        "could not open 'creckless.lib'").
+//   * not opted in (default)          → honest stubs, and `rk_backend_is_stub()`
+//                                        / `RecklessBackend.current` say so.
+// Every effect below is additionally gated `.when(platforms: [.linux, .windows])`,
+// so this variable leaking into an Apple or Android build environment — the
+// hazard the __CFBundleIdentifier hardening above was written for — cannot
+// change what those arms link.
+let desktopArchiveOptIn = Context.environment["SWIFTRECKLESS_LINK_ARCHIVE"] == "1"
 
 // SHA-256 backend for NNUE verification. Apple builds use CryptoKit from the
 // OS. Linux/Android builds need swift-crypto's source-compatible `Crypto`
@@ -124,10 +161,11 @@ if useBinaryEngine {
         ),
     ]
 } else {
-    // NON-APPLE / forced-source path. Non-Android hosts compile link-compatible
-    // stubs. The Android root application must pass its cross-built
-    // libcreckless.a as a positional link input; keeping that local path out of
-    // this versioned package preserves remote-consumer safety.
+    // NON-APPLE / forced-source path. Every platform in this arm that has not
+    // been told a real archive is coming compiles link-compatible stubs. The
+    // Android root application must pass its cross-built libcreckless.a as a
+    // positional link input; keeping that local path out of this versioned
+    // package preserves remote-consumer safety.
     //
     // Typical invocation (Android cross-build):
     //   SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 \
@@ -135,29 +173,96 @@ if useBinaryEngine {
     //   swift build --swift-sdk aarch64-android
     // RECKLESS_LIB_DIR is interpreted by the root application manifest, not
     // by this dependency manifest.
+    //
+    // Typical invocation (Linux / Windows desktop, host build):
+    //   bash Tools/build-desktop.sh                  # → the archive
+    //   SWIFTRECKLESS_LINK_ARCHIVE=1 \
+    //   LIBRARY_PATH=/path/to/rust/target/x86_64-unknown-linux-gnu/release \
+    //   swift build
+    // `swift build -Xlinker -L<dir>` works equally well; the search path is the
+    // consumer's to supply, exactly as the archive path is on Android. On
+    // Windows use `-Xlinker /LIBPATH:<dir>` and NOT the LIB environment
+    // variable: defining LIB outside a Visual Studio developer prompt stops
+    // clang auto-detecting the MSVC/Windows SDK library directories and breaks
+    // the link (msvcrt.lib / oldnames.lib / msvcprt.lib), manifest compile
+    // included.
+
+    var sourceCSettings: [CSetting] = [
+        .headerSearchPath("."),
+        // Tells Sources/CReckless/RecklessBackend.h that this is the source
+        // arm. The binary arm never defines it, so the same header reports a
+        // real backend there without knowing anything about XCFrameworks.
+        .define("RECKLESS_SOURCE_ARM", to: "1"),
+    ]
+
+    var sourceLinkerSettings: [LinkerSetting] = [
+        // The Android Rust archive uses the NDK C++ runtime. The root
+        // application provides the archive path; this safe declaration
+        // propagates -lc++ without poisoning versioned consumers.
+        //
+        // This stays ANDROID-ONLY on purpose. `rustc --print native-static-libs`
+        // for the desktop targets asks for no C++ runtime at all:
+        //   x86_64-unknown-linux-gnu → -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc
+        //   x86_64-pc-windows-msvc   → legacy_stdio_definitions.lib kernel32.lib
+        //                              ntdll.lib userenv.lib ws2_32.lib
+        //                              dbghelp.lib /defaultlib:msvcrt
+        // (measured against the archives this crate actually produces, 2026-08).
+        .linkedLibrary("c++", .when(platforms: [.android])),
+    ]
+
+    if desktopArchiveOptIn {
+        // 1. Stop compiling stubs for the opted-in desktop platforms. This is
+        //    the load-bearing half: a stub object file always beats an archive
+        //    member, so leaving them in would link a silent no-op engine on top
+        //    of a perfectly good archive.
+        sourceCSettings.append(
+            .define("RECKLESS_LINK_ARCHIVE", to: "1", .when(platforms: [.linux, .windows]))
+        )
+        // 2. Ask for the archive by name. `.linkedLibrary` is a SAFE setting, so
+        //    this survives in a tagged dependency; the consumer supplies the
+        //    search path. If they opted in and supplied nothing, the link fails
+        //    here — which is the intended, loud outcome.
+        //    `-lcreckless` resolves to `libcreckless.a` (Linux) and
+        //    `creckless.lib` (MSVC), the two names cargo already emits.
+        sourceLinkerSettings.append(
+            .linkedLibrary("creckless", .when(platforms: [.linux, .windows]))
+        )
+        // 3. The Rust staticlib's own native dependencies, from the
+        //    `--print native-static-libs` lists above. libc/libgcc_s come from
+        //    the Swift driver's own link line on Linux, and msvcrt is MSVC's
+        //    default lib, so neither is repeated here.
+        sourceLinkerSettings += [
+            .linkedLibrary("m", .when(platforms: [.linux])),
+            .linkedLibrary("dl", .when(platforms: [.linux])),
+            .linkedLibrary("pthread", .when(platforms: [.linux])),
+            .linkedLibrary("rt", .when(platforms: [.linux])),
+            .linkedLibrary("util", .when(platforms: [.linux])),
+            .linkedLibrary("kernel32", .when(platforms: [.windows])),
+            .linkedLibrary("ntdll", .when(platforms: [.windows])),
+            .linkedLibrary("userenv", .when(platforms: [.windows])),
+            .linkedLibrary("ws2_32", .when(platforms: [.windows])),
+            .linkedLibrary("dbghelp", .when(platforms: [.windows])),
+            .linkedLibrary("legacy_stdio_definitions", .when(platforms: [.windows])),
+        ]
+    }
 
     engineTargets = [
         .target(
             name: "CReckless",
             path: "Sources/CReckless",
-            // RecklessHostStubs.c provides no-op rk_ffi_* for every NON-Android
-            // platform in this arm (guarded by #if !defined(__ANDROID__)), so
-            // the Skip/gradle HOST-introspection build (macOS host targeting
-            // arm64-apple-ios, same env as the Android cross-build) links
-            // WITHOUT the ELF .a. Without this, that host link failed
-            // ("archive member '/' not a mach-o file") and skipstone silently
-            // reused STALE transpiled Kotlin while gradle reported SUCCESS.
+            // RecklessHostStubs.c provides no-op rk_ffi_* for every platform in
+            // this arm that is NOT linking a real archive (the condition lives
+            // in RecklessBackend.h), so the Skip/gradle HOST-introspection build
+            // (macOS host targeting arm64-apple-ios, same env as the Android
+            // cross-build) links WITHOUT the ELF .a. Without this, that host
+            // link failed ("archive member '/' not a mach-o file") and skipstone
+            // silently reused STALE transpiled Kotlin while gradle reported
+            // SUCCESS. The desktop opt-in above is platform-scoped precisely so
+            // it can never reach that Apple host pass.
             sources: ["RecklessBridge.c", "RecklessHostStubs.c"],
             publicHeadersPath: "include",
-            cSettings: [
-                .headerSearchPath("."),
-            ],
-            linkerSettings: [
-                // The Android Rust archive uses the NDK C++ runtime. The root
-                // application provides the archive path; this safe declaration
-                // propagates -lc++ without poisoning versioned consumers.
-                .linkedLibrary("c++", .when(platforms: [.android])),
-            ]
+            cSettings: sourceCSettings,
+            linkerSettings: sourceLinkerSettings
         ),
     ]
 }

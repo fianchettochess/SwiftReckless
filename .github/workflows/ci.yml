@@ -47,6 +47,13 @@ jobs:
       - name: Build source-stub package path
         run: swift build
       - name: Test source-stub package path
+        # This job supplies no creckless archive, so it MUST link stubs. Saying
+        # so turns a green run from "something built" into "the intended thing
+        # built": without the assertion, a stub link and a real link are
+        # indistinguishable here, and a silently stubbed engine is the failure
+        # this package is designed to make impossible.
+        env:
+          SWIFTRECKLESS_EXPECT_BACKEND: stub
         run: swift test
       - name: Versioned remote-consumer build
         shell: bash

@@ -145,20 +145,67 @@ lifetimes are still rejected with `NULL`.
 | Condition | Arm | What links |
 |---|---|---|
 | Apple host, default (and **always** under Xcode) | **binary** | `.binaryTarget` → `Frameworks/RecklessFFI.xcframework` and `RecklessBridge.c` |
-| Non-Apple host, or `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1` in an Apple command-line build | **source** | `RecklessBridge.c` and `RecklessHostStubs.c`; Android integration also links a cross-built `libcreckless.a` |
+| Non-Apple host, or `SWIFTRECKLESS_FORCE_SOURCE_BUILD=1` in an Apple command-line build | **source** | `RecklessBridge.c`, plus `RecklessHostStubs.c` on any platform not told an archive is coming. Android links a cross-built `libcreckless.a`; Linux and Windows link `libcreckless.a` / `creckless.lib` under `SWIFTRECKLESS_LINK_ARCHIVE=1` |
 
 - **`SWIFTRECKLESS_FORCE_SOURCE_BUILD=1`** selects the source arm outside
   Xcode. Xcode deliberately ignores it and always uses the binary arm.
-- **`RECKLESS_LIB_DIR`** is an integration input for the consuming Android root
-  package. It points at the directory holding the cross-built
-  `libcreckless.a`; SwiftReckless does not embed that machine-local path in its
-  published manifest.
+- **`RECKLESS_LIB_DIR`** is an integration input for the consuming root
+  package — on every platform, desktop included. It points at the directory
+  holding the built archive; SwiftReckless does not embed that machine-local
+  path in its published manifest, because a path could only become a link input
+  through `.unsafeFlags`, and unsafe flags in a versioned dependency make its
+  products unusable to every remote consumer.
+- **`SWIFTRECKLESS_LINK_ARCHIVE=1`** is the desktop counterpart, and is
+  deliberately a boolean rather than a path: it declares "for this build I am
+  supplying a real `creckless` archive on the linker search path". SwiftReckless
+  then stops compiling stubs for Linux/Windows and asks for the archive through
+  `.linkedLibrary`, which is a *safe* build setting and so stays legal in a
+  tagged dependency. Every effect is scoped `.when(platforms: [.linux, .windows])`,
+  so the variable leaking into an Apple or Android build environment cannot
+  change what those arms link.
 - **Under Xcode** (`__CFBundleIdentifier == com.apple.dt.Xcode`) the binary arm is
   always used, so an Xcode build never tries to link an Android ELF.
-- On Linux and every other non-Android host in the source arm,
-  `RecklessHostStubs.c` provides no-op `rk_ffi_*` symbols so the Skip/Gradle
-  host-introspection pass links cleanly. This configuration is build-only and
+- Any platform in the source arm that has *not* been told an archive is coming
+  compiles `RecklessHostStubs.c`, which provides no-op `rk_ffi_*` symbols — so
+  the Skip/Gradle host-introspection pass links cleanly, and a desktop consumer
+  who has supplied nothing still builds. That configuration is build-only and
   does not provide a live Reckless engine.
+
+### Knowing which backend you got
+
+The stub configuration is supported; an *undetected* stub configuration is not.
+A stub build otherwise looks exactly like a real build whose NNUE network is
+missing — both are just `RecklessEngine.init?` returning `nil`. So the build
+reports itself:
+
+```swift
+import SwiftReckless
+
+RecklessBackend.current            // .real or .stub
+RecklessBackend.isEngineAvailable  // false ⇒ a build problem, not a provisioning one
+```
+
+```c
+#include "RecklessBridge.h"
+int stubbed = rk_backend_is_stub();  // compile-time constant, safe before rk_create
+```
+
+- `RecklessEngine.init?` logs a line naming the stub backend, before it ever
+  looks for the net.
+- `swift run reckless-smoke` prints `backend: real|stub` and exits non-zero on a
+  stub instead of reporting a generic engine failure.
+- CI can assert the link it meant to produce: set
+  `SWIFTRECKLESS_EXPECT_BACKEND=real|stub` and the test suite fails if the build
+  linked the other one. Unset, that test records a skip.
+
+All of these read one preprocessor condition
+(`Sources/CReckless/RecklessBackend.h`), which is also what decides whether the
+stubs are compiled at all — so the report cannot drift from the backend it
+describes.
+
+Opting in and then supplying nothing is a **link error**
+(`unable to find library -lcreckless`, `could not open 'creckless.lib'`), never a
+quiet fallback to stubs.
 
 The prebuilt XCFramework is committed to `main` as a path-based binary target,
 so a fresh clone links with a plain `swift build` on Apple — no rebuild needed.
@@ -295,6 +342,68 @@ can use the Stockfish-compatible `send(_:)` / `output` surface, but must retain
 one long-lived `output` subscription. Concrete consumers that cancel and restart
 reads on the same process-lifetime engine must use `cancellationSafeOutput`;
 canceling one of its waiters does not finish output for later searches.
+
+### Linux and Windows (desktop)
+
+Desktop uses the **source arm** too, and follows the Android shape: build the
+Rust static library, then hand it to the link. The difference is that the
+desktop archive is asked for by name (`.linkedLibrary("creckless")`, a safe
+build setting) and the consumer supplies only the *search path*, so nothing
+machine-local has to enter a manifest.
+
+```bash
+# 1. Build the archive (cross-builds from any host — a staticlib needs no linker)
+bash Tools/build-desktop.sh linux          # → rust/target/x86_64-unknown-linux-gnu/release/libcreckless.a
+bash Tools/build-desktop.sh windows        # → rust/target/x86_64-pc-windows-msvc/release/creckless.lib
+
+# 2a. Linux: opt in, and put the directory on the linker search path
+export SWIFTRECKLESS_LINK_ARCHIVE=1
+export LIBRARY_PATH=$PWD/rust/target/x86_64-unknown-linux-gnu/release
+swift build
+# equivalently:  swift build -Xlinker -L$PWD/rust/target/x86_64-unknown-linux-gnu/release
+```
+
+```powershell
+# 2b. Windows (PowerShell)
+$env:SWIFTRECKLESS_LINK_ARCHIVE = '1'
+swift build -Xlinker "/LIBPATH:$PWD\rust\target\x86_64-pc-windows-msvc\release"
+```
+
+> [!WARNING]
+> On Windows, prefer `-Xlinker /LIBPATH:`. Setting `LIB` from an ordinary shell
+> **breaks the build**: clang stops auto-detecting the MSVC and Windows SDK
+> library directories once `LIB` is defined, and the link then fails on
+> `msvcrt.lib` / `oldnames.lib` / `msvcprt.lib` — including while compiling the
+> package manifest. `LIB` is only safe to *append* to inside a Visual Studio
+> developer command prompt, where it already carries those directories.
+
+Then confirm what you actually linked, rather than assuming:
+
+```bash
+SWIFTRECKLESS_EXPECT_BACKEND=real swift test    # fails if the build linked stubs
+swift run reckless-smoke                        # prints "backend: real", then uci → bestmove
+```
+
+**Native link dependencies.** These come straight from
+`rustc --print native-static-libs` for the crate (the build script prints the
+current list on every run) and are declared by the package under the opt-in:
+
+| Target | Needs |
+|---|---|
+| `x86_64-unknown-linux-gnu` | `-lm -ldl -lpthread -lrt -lutil` (plus `libc`/`libgcc_s`, already on the Swift driver's link line). **No C++ runtime.** |
+| `x86_64-pc-windows-msvc` | `kernel32 ntdll userenv ws2_32 dbghelp legacy_stdio_definitions` (plus the default `msvcrt`). **No C++ runtime.** |
+
+`-lc++` stays Android-only: it is the NDK's runtime requirement, not a
+Reckless one.
+
+**CPU requirement.** `Tools/build-desktop.sh` defaults to the same
+`+avx2,+bmi2,+popcnt` baseline as the x86_64 Apple slices, so its output
+requires Haswell-class hardware or newer — Reckless picks its NNUE path at
+compile time and has no runtime dispatch. Override with
+`RECKLESS_TARGET_FEATURES` for a lower baseline.
+
+The archive is not committed (it is 14–24 MB per target and is rebuilt only when
+the engine changes), so a checkout with no archive links stubs and says so.
 
 ## Reckless engine facts
 
