@@ -19,6 +19,7 @@ CI builds that need to produce fresh XCFrameworks.
 | `RECKLESS_LIB_DIR` | Integration input read by the consuming root package, on every platform. It points to the directory containing the built archive; SwiftReckless does not embed this local path in its published manifest, because a path could only become a link input through `.unsafeFlags`, which would make the package's products unusable to remote consumers. |
 | `SWIFTRECKLESS_LINK_ARCHIVE=1` | Desktop (Linux/Windows) opt-in, read by *this* manifest. A boolean, not a path: it declares that a real `creckless` archive is on the linker search path, so the package stops compiling stubs for those platforms and asks for the archive via `.linkedLibrary` — a safe build setting that stays legal in a tagged dependency. All of its effects are scoped `.when(platforms: [.linux, .windows])`. |
 | `SWIFTRECKLESS_EXPECT_BACKEND=real\|stub` | Test-suite assertion. Fails the run if the build linked the other backend; records a skip when unset. Set it in any CI job that has an opinion about what it just built. |
+| `SWIFTRECKLESS_REQUIRE_NET=1` | Test-suite assertion for the Rust crate. `rust/tests/ffi_smoke.rs` skips when the NNUE net is not staged at `rust/networks/` — right for a developer who has not downloaded 60 MB, wrong for a job whose name promises FFI coverage. Set it wherever the net is staged and a missing net becomes a failure instead of a pass that never touched the FFI. An empty value counts as unset. |
 
 ### Which backend did this build get?
 

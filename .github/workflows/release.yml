@@ -184,6 +184,13 @@ jobs:
             'rust/networks/v54-5478683c.nnue' | shasum -a 256 -c -
 
       - name: Test Rust targets against the locked graph
+        # The step above staged the net, so ffi_smoke.rs must RUN, not skip.
+        # This does not guard the download — `curl -f` plus the checksum above
+        # already fail loudly on that. It guards the quieter drift: a net
+        # filename bumped in the staging step but not in ffi_smoke.rs, which
+        # would otherwise skip the live FFI test and still publish a release.
+        env:
+          SWIFTRECKLESS_REQUIRE_NET: '1'
         run: cargo test --manifest-path rust/Cargo.toml --locked --all-targets
 
       - name: Test the terminal-position guard

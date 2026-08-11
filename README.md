@@ -197,6 +197,11 @@ int stubbed = rk_backend_is_stub();  // compile-time constant, safe before rk_cr
 - CI can assert the link it meant to produce: set
   `SWIFTRECKLESS_EXPECT_BACKEND=real|stub` and the test suite fails if the build
   linked the other one. Unset, that test records a skip.
+- The same discipline applies to the net: `rust/tests/ffi_smoke.rs` skips when
+  the NNUE net is absent, so any CI job that stages it sets
+  `SWIFTRECKLESS_REQUIRE_NET=1` and a missing net fails instead of skipping.
+  Without that, a job named "Rust FFI tests" reports `ok. 1 passed` having
+  compiled the engine and run none of it.
 
 All of these read one preprocessor condition
 (`Sources/CReckless/RecklessBackend.h`), which is also what decides whether the

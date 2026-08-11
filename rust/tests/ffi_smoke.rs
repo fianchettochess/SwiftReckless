@@ -7,8 +7,24 @@
 // collided with cargo test's stdout-capture harness.
 //
 // Net guard: the NNUE net is gitignored (~60 MB). If it isn't staged at
-// rust/networks/, the test prints a note and passes (skips) so a fresh checkout /
-// CI without the net stays green.
+// rust/networks/, the test prints a note and passes (skips) so a fresh checkout
+// stays green for a developer who has not downloaded it.
+//
+// THAT SKIP IS ONLY SAFE WHERE NOBODY IS RELYING ON THIS TEST. It was not: for
+// a period, ci.yml's `rust` job — named "SwiftReckless — Rust FFI tests", the
+// only pull_request-triggered job touching this crate — never staged the net,
+// so it compiled the engine on every run, executed it on none, and reported
+// "ok. 1 passed" either way. A test whose name promises FFI coverage passed
+// without touching the FFI, and no signal distinguished that from real
+// coverage.
+//
+// So the skip is now OPT-OUT rather than automatic: any job that stages the net
+// sets SWIFTRECKLESS_REQUIRE_NET=1, and a missing net there is a FAILURE, not a
+// skip. The developer convenience survives; the silent pass in CI cannot. Note
+// which failure this catches — not "the download 404'd" (the staging steps use
+// `curl -f` plus a checksum and already fail loudly on that), but the quieter
+// one: a staging step deleted, renamed, reordered after the test, or left
+// pointing at a net filename this file no longer expects.
 //
 // This crate has exactly ONE engine test, so cargo test's default parallelism
 // cannot introduce an unrelated engine. The test itself verifies that overlap
@@ -24,6 +40,18 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const NET_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/networks/v54-5478683c.nnue");
+
+/// Set by any CI job that stages the NNUE net, declaring that this job expects
+/// the live FFI to actually run. When it is set, an absent net fails the test
+/// instead of skipping it.
+const REQUIRE_NET_VAR: &str = "SWIFTRECKLESS_REQUIRE_NET";
+
+/// An empty value counts as unset, matching how the release workflow neutralises
+/// `SWIFTRECKLESS_FORCE_SOURCE_BUILD: ''` per step — a job can turn the
+/// requirement off without having to unset an inherited variable.
+fn net_is_required() -> bool {
+    std::env::var(REQUIRE_NET_VAR).is_ok_and(|v| !v.is_empty())
+}
 
 struct Collector {
     lines: Mutex<Vec<String>>,
@@ -58,7 +86,21 @@ fn wait_for<F: Fn(&[String]) -> bool>(c: &Collector, pred: F, timeout: Duration)
 #[test]
 fn ffi_uci_isready_bestmove() {
     if !Path::new(NET_PATH).exists() {
+        assert!(
+            !net_is_required(),
+            "{REQUIRE_NET_VAR} is set, so this job is supposed to exercise the real \
+             rk_ffi_* ABI, but the NNUE net is not staged at {NET_PATH}.\n\
+             This test would otherwise have SKIPPED and still reported \"ok. 1 passed\", \
+             which is the exact silent pass this variable exists to prevent.\n\
+             Either the job's net-staging step is missing/broken, or it stages a \
+             different filename than this test expects. Fix the staging — do not \
+             unset {REQUIRE_NET_VAR}."
+        );
         eprintln!("[ffi_smoke] SKIP — NNUE net not staged at {NET_PATH}");
+        eprintln!(
+            "[ffi_smoke] the rk_ffi_* ABI was NOT exercised; set {REQUIRE_NET_VAR}=1 \
+             to make this a failure"
+        );
         return; // treated as a pass; the net is gitignored (see rust/networks/)
     }
 
