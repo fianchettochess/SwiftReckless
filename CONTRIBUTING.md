@@ -24,6 +24,20 @@ record a skip and the Rust smoke test returns without exercising the engine.
 Changes to the FFI, engine lifecycle, or binary artifact must be validated with
 that network staged.
 
+That skip is a convenience for you, not a mode CI is allowed to run in. Any job
+that stages the net sets `SWIFTRECKLESS_REQUIRE_NET=1`, which turns a missing
+net into a failure rather than a skip — otherwise `rust/tests/ffi_smoke.rs`
+reports `ok. 1 passed` without touching the FFI, which is precisely what
+ci.yml's `rust` job did until the net was staged there. Set it locally too when
+you mean to test the engine:
+
+```bash
+SWIFTRECKLESS_REQUIRE_NET=1 cargo test --manifest-path rust/Cargo.toml --locked
+```
+
+A real run takes a moment and logs `[creckless] rk_ffi_create: ...`; a skip
+finishes in `0.00s` and logs nothing. Read that, not the `ok`.
+
 The forced-source test intentionally records a skip for the live-engine suite
 on macOS and Linux because those configurations link host stubs. With the
 network staged, validate the real Rust engine and terminal-position regression:

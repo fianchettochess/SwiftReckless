@@ -7,9 +7,13 @@ name: SwiftReckless — CI (Linux + Rust)
 #
 # The Linux source-stub path compiles the thin C bridge + RecklessHostStubs.c (no-op
 # rk_ffi_* symbols), proving the package builds and tests without the binary
-# engine. The NNUE net is gitignored, so its live-engine smoke test records a
-# skip. The Release workflow separately rebuilds the exact binary, stages the
-# NNUE network, and runs both Rust and Swift live-engine tests before publish.
+# engine. Its SWIFT live-engine smoke test still records a skip, deliberately:
+# that job supplies no archive, so it has no engine to drive whether or not the
+# net is present. The Release workflow separately rebuilds the exact binary,
+# stages the NNUE network, and runs both Rust and Swift live-engine tests.
+#
+# The `rust` job below DOES stage the net, and did not always — see the comment
+# on that job. That is the difference between compiling the engine and running it.
 
 on:
   workflow_dispatch:
@@ -29,10 +33,84 @@ jobs:
     name: SwiftReckless — Rust FFI tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # THIS JOB MUST STAGE THE NET, AND FOR A WHILE IT DID NOT.
+    #
+    # The crate's only test, rust/tests/ffi_smoke.rs, skips when the NNUE net is
+    # absent — correct for a developer who has not downloaded 60 MB, and wrong
+    # here. This job never staged it, so on every pull request it compiled the
+    # AGPL engine and executed it zero times, printing "[ffi_smoke] SKIP" and
+    # then "test result: ok. 1 passed" for an exit code of 0. A job named "Rust
+    # FFI tests" was green whether or not the FFI worked, and nothing in the run
+    # log distinguished that from real coverage.
+    #
+    # Two things close it, and they are not alternatives:
+    #   1. Stage the net (below), so the test actually runs. This is the fix —
+    #      it is what turns a compile into an execution. It is also the only one
+    #      of the two that adds coverage: an assertion alone cannot run a test
+    #      for which no net exists.
+    #   2. SWIFTRECKLESS_REQUIRE_NET=1 (below), which converts the skip into a
+    #      hard failure. This adds no coverage by itself — it is the tripwire
+    #      that keeps (1) honest. Without it, deleting, renaming or reordering
+    #      the staging step silently restores the original silent pass, which is
+    #      exactly how this hole appeared in the first place.
+    #
+    # WHY THE FAST LANE AND NOT JUST THE RELEASE. release.yml already stages the
+    # net and runs --all-targets, and ci-desktop-archive.yml runs a real search,
+    # so this was a hole in the fast lane rather than in the release. But
+    # ci-desktop-archive.yml is paths-filtered to rust/** and friends, and this
+    # is the only PR-triggered job that touches the crate at all — so before
+    # this change, a pull request that did not match that filter got no live
+    # engine anywhere, and one that did learned of a broken FFI from a 45-minute
+    # release-profile gate instead of a 1-second test.
+    #
+    # COST: one ~60 MB download on a cache miss. The test itself runs in ~0.3s
+    # (measured, debug profile, two full engine lifetimes) and the crate compiles
+    # in ~7s warm, so the net transfer dominates and the cache removes it.
     steps:
       - name: Checkout SwiftReckless
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Test Rust FFI crate
+
+      # Keyed on the net's own SHA-256, so a hit is always the right bytes and a
+      # net bump is a new key rather than a stale entry. Deliberately the SAME
+      # key as ci-desktop-archive.yml, which stages the identical immutable file:
+      # sharing one entry is intentional, not a collision.
+      - name: Cache NNUE network
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: rust/networks
+          key: reckless-nnue-5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf
+
+      # The checksum is verified on EVERY run, cache hit or not — a cache is an
+      # untrusted input, and a truncated net presents as a mysterious engine-init
+      # failure rather than a checksum error. Nothing in this job is conditioned
+      # on cache-hit: a cache may only make the job faster, never shorten the
+      # path to green.
+      - name: Stage and verify the live NNUE network
+        shell: bash
+        run: |
+          set -euo pipefail
+          NET='rust/networks/v54-5478683c.nnue'
+          SHA='5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf'
+          mkdir -p rust/networks
+          if [ -f "${NET}" ] && [ "$(sha256sum "${NET}" | cut -d' ' -f1)" = "${SHA}" ]; then
+            echo "already staged and verified: ${NET}"
+          else
+            rm -f "${NET}"
+            # Download to .part and rename only after the checksum passes, so an
+            # interrupted run can never leave a short file that a later cache
+            # save would then publish as valid.
+            curl -fsSL -o "${NET}.part" \
+              https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v54-5478683c.nnue
+            printf '%s  %s\n' "${SHA}" "${NET}.part" | sha256sum -c -
+            mv "${NET}.part" "${NET}"
+          fi
+
+      - name: Test Rust FFI crate against the live engine
+        # Declares that this job stages the net and therefore expects the real
+        # rk_ffi_* ABI to run. ffi_smoke.rs FAILS instead of skipping if the net
+        # is missing. Do not remove this to make a red run green.
+        env:
+          SWIFTRECKLESS_REQUIRE_NET: '1'
         run: cargo test --manifest-path rust/Cargo.toml --locked
 
   linux-x86_64:
