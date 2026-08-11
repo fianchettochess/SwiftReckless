@@ -113,6 +113,22 @@ jobs:
     # that the archive-linked path has never been built on 6.0.3 — nothing here
     # claims it works there.
     container: swift:6.3.3-noble
+
+    # EVERY `run:` STEP GETS bash, EXPLICITLY. Inside this container GitHub
+    # resolved the default step shell to `sh` (dash), and dash has no
+    # `pipefail` — so the very first inline step died on
+    # `set: Illegal option -o pipefail` before the gate reached any Swift.
+    # Found by the gate's first real Linux run, which is the argument for
+    # dispatching a new gate once rather than letting a pull request find it.
+    #
+    # It was NOT caught by pre-merge review, and the reason is worth recording:
+    # the precheck was verified by running it in a Linux container directly,
+    # under bash, which never exercises the shell GitHub actually selects. A
+    # step's shell is part of its environment, not part of its script.
+    defaults:
+      run:
+        shell: bash
+
     steps:
       # Fail in seconds, before apt, checkout or a cache restore. Deliberately
       # duplicated with the same check inside verify-desktop-gate.sh, which must
