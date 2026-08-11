@@ -313,6 +313,25 @@ let package = Package(
             dependencies: ["SwiftReckless"],
             path: "Sources/reckless-smoke"
         ),
+        // Known-answer gate: asks positions whose answer is FORCED (two mates,
+        // one only-legal-move) and checks that node counts grow with depth.
+        // This is the "it plays chess" claim, which is strictly stronger than
+        // both "it linked" (true of any build) and "it reports backend ==
+        // .real" (RecklessBackendTests) — RecklessHostStubs.c makes those two
+        // claims link-compatible with a no-op engine, so only a real search
+        // separates them.
+        //
+        // Committed rather than inlined into a CI heredoc so the person a red
+        // gate lands on can run exactly what CI ran:
+        //
+        //   bash Tools/verify-desktop-gate.sh            # both arms + margin
+        //   swift run -c release reckless-known-answer   # the real arm alone
+        //
+        .executableTarget(
+            name: "reckless-known-answer",
+            dependencies: ["SwiftReckless"],
+            path: "Sources/reckless-known-answer"
+        ),
         .testTarget(
             name: "SwiftRecklessTests",
             dependencies: ["SwiftReckless"],
