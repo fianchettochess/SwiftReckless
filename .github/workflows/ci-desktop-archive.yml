@@ -1,0 +1,212 @@
+name: SwiftReckless — desktop real-archive gate (Linux x86_64)
+
+# THE CLAIM THIS JOB MAKES, WHICH NO OTHER JOB IN THIS REPO MAKES:
+# the desktop archive links AND plays chess, and the no-opt-in build from the
+# same tree refuses to.
+#
+# Everything else already covered, and deliberately NOT repeated here:
+#   * ci.yml `linux-x86_64` asserts the backend ENUM under SWIFTRECKLESS_EXPECT_BACKEND=stub.
+#     An archive that linked correctly but could not search would pass that.
+#   * ci.yml also owns the SemVer remote-consumer fixture and the swift:6.0.3-jammy
+#     floor build. Not duplicated here.
+#   * ci-macos-trusted.yml runs a live engine, but on the Apple BINARY arm. Every
+#     desktop effect in Package.swift is `.when(platforms: [.linux, .windows])`,
+#     so a macOS runner physically cannot exercise this recipe.
+#
+# Before this job existed, four things had never happened in CI at all:
+# (a) the desktop release archive was never built; (b) SWIFTRECKLESS_LINK_ARCHIVE
+# had never been set by any workflow; (c) no search had ever run on Linux;
+# (d) no job had ever compared a real build against a stub build from one tree.
+#
+# ── WHY BOTH ARMS ───────────────────────────────────────────────────────────
+# Sources/CReckless/RecklessHostStubs.c supplies link-compatible no-op rk_ffi_*
+# symbols, so "it linked" and "it plays chess" are different claims. A job that
+# only ever built the REAL arm could not tell you the opt-in did anything: if
+# SWIFTRECKLESS_LINK_ARCHIVE silently stopped being honoured, that job would
+# keep passing against the stub forever. The assertion here is the MARGIN
+# between the arms — stub refuses non-zero, real answers zero — not the outcome
+# of the good one.
+#
+# ── WHY THE LOGIC IS NOT IN THIS FILE ───────────────────────────────────────
+# Everything below the runner setup is `bash Tools/verify-desktop-gate.sh`,
+# which drives the committed `reckless-known-answer` target. A gate whose logic
+# lives only in a workflow file cannot be run by the person it fails on, and a
+# gate nobody can reproduce gets deleted rather than fixed. Reproduce a red run
+# on any Linux x86_64 box with exactly:
+#
+#     bash Tools/verify-desktop-gate.sh
+#
+# ── AGPL ────────────────────────────────────────────────────────────────────
+# This builds the AGPL-3.0 engine fork from the immutable tag pinned in
+# rust/Cargo.lock (swiftreckless-v0.9.1 = de35beac), through
+# Tools/build-desktop.sh with cargo's `--locked`. No engine source is vendored
+# and nothing is re-pinned. The archive stays inside the job: it is never
+# uploaded as an artifact and never attached to a release.
+
+# The two triggers share one filter, defined once below as a YAML anchor. They
+# were asymmetric: `pull_request` was filtered to these nine paths with an
+# explicit cost rationale while `push: [main]` was unfiltered — so a README
+# commit, a docs edit or a .gitignore tweak on main ran a multi-GB container
+# pull plus a release engine compile plus two release Swift builds. That is the
+# single largest recurring cost in this file and it contradicted the file's own
+# stated policy. There is no coverage argument for the asymmetry: a squash-merge
+# of a rust/** PR still matches the filter.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: &gate_paths
+      - 'rust/**'
+      - 'Sources/CReckless/**'
+      - 'Sources/SwiftReckless/**'
+      - 'Sources/reckless-known-answer/**'
+      - 'Package.swift'
+      - 'rust-toolchain.toml'
+      - 'Tools/build-desktop.sh'
+      - 'Tools/verify-desktop-gate.sh'
+      - '.github/workflows/ci-desktop-archive.yml'
+  # PATHS-FILTERED ON PURPOSE. This repo is private, so hosted minutes are
+  # billed, and this job costs one RELEASE-profile engine compile plus two
+  # release Swift builds. Running it on every PR touching a README would be
+  # waste; running it on no PR at all would mean the first sign of a broken
+  # desktop link is a red main. The filter is every input that can change what
+  # gets linked or how it behaves.
+  pull_request:
+    paths: *gate_paths
+
+permissions:
+  contents: read
+
+# Its own group, not ci.yml's: cancelling a superseded archive gate must not
+# cancel the source-stub CI for the same ref, and vice versa.
+concurrency:
+  group: desktop-archive-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-archive:
+    name: Real archive links and plays chess (Linux x86_64)
+    # RUNNER JUSTIFICATION.
+    #   * It must be Linux. Package.swift scopes every desktop setting to
+    #     `.when(platforms: [.linux, .windows])`, so macOS cannot exercise this
+    #     path. build-desktop.sh can cross-build the ELF archive from macOS (a
+    #     staticlib needs no linker), but macOS cannot RUN it, and running the
+    #     search is the whole point.
+    #   * There is no self-hosted Linux runner in this repo — the only
+    #     self-hosted labels anywhere are [self-hosted, macOS, X64] — so hosted
+    #     is forced rather than chosen. It is also the cheapest tier (Linux 1x).
+    #   * Hosted keeps the standing security policy intact: persistent
+    #     self-hosted machines never execute PR code. Because this job is
+    #     hosted, it is safe on pull_request, which is why the paths filter
+    #     above is allowed to exist at all.
+    runs-on: ubuntu-latest
+    # Cold cost is one release engine compile + two release Swift builds (each
+    # pulling swift-crypto, since both arms are the source arm on Linux) + a
+    # ~60 MB net download. 45 min is generous headroom on a cold cache.
+    timeout-minutes: 45
+    # PINNED TO THE ENVIRONMENT THE RECIPE WAS MEASURED IN: Ubuntu 24.04 +
+    # Swift 6.3.3, matching the 2026-08-10 proof exactly. This is deliberately
+    # NOT ci.yml's swift:6.0.3-jammy, and the two pins answer different
+    # questions: ci.yml pins the package's declared minimum tools version to
+    # prove the floor still builds; this job pins the measured environment so
+    # that a failure here means the ENGINE changed, not the SDK. Note honestly
+    # that the archive-linked path has never been built on 6.0.3 — nothing here
+    # claims it works there.
+    container: swift:6.3.3-noble
+    steps:
+      # Fail in seconds, before apt, checkout or a cache restore. Deliberately
+      # duplicated with the same check inside verify-desktop-gate.sh, which must
+      # stand alone for local runs.
+      #
+      # The archive is compiled +avx2,+bmi2,+popcnt and Reckless selects SIMD at
+      # COMPILE time with no runtime dispatch, so a runner without these does
+      # not degrade — it raises SIGILL mid-search. Without this check the
+      # failure mode is an unexplained crash rather than a message. Both
+      # self-hosted macOS jobs already do the sysctl equivalent; the Linux side
+      # had no such guard because it had no such job.
+      - name: Precheck CPU baseline (AVX2 / BMI2 / POPCNT)
+        run: |
+          set -euo pipefail
+          for feature in avx2 bmi2 popcnt; do
+            grep -qw "${feature}" /proc/cpuinfo || {
+              echo "::error::runner CPU lacks ${feature}; the archive's Haswell-class baseline would SIGILL"
+              exit 1
+            }
+          done
+          echo "avx2, bmi2, popcnt present"
+
+      # curl + ca-certificates for rustup and the NNUE download; gcc because
+      # cargo links host build scripts with `cc`, which the Swift image (clang
+      # only) does not provide. The staticlib itself needs no linker.
+      - name: Install rustup prerequisites
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl gcc
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Checkout SwiftReckless
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # CACHE CONTRACT — READ BEFORE EDITING.
+      # NO step in this job is conditioned on `cache-hit`. The archive build,
+      # both Swift builds, and both search runs execute unconditionally on every
+      # run. A cache may only make this job FASTER; it must never shorten the
+      # path to a green result, because the searches ARE the gate. If you ever
+      # find yourself adding `if: steps.cache.outputs.cache-hit != 'true'` to a
+      # build or assert step, you have deleted the gate and left the badge.
+      # `rust/target` IS DELIBERATELY NOT CACHED. It held the archive this gate
+      # exists to validate, and caching an artifact under test is how a gate
+      # comes to certify something no run produced. Two independent holes, both
+      # real: the key hashed only rust-toolchain.toml, rust/Cargo.lock and
+      # Tools/build-desktop.sh, so edits to rust/src/** — the FFI shim itself —
+      # did not change it; and `actions/cache` does not re-save on an exact key
+      # hit, so the entry froze at whatever the first run produced. Worse, the
+      # bare `restore-keys:` prefix restored a stale target dir even on a key
+      # MISS, so adding rust/src/** to the key would not have fixed it.
+      #
+      # What is cached is what is slow: the crates.io registry, the git checkout
+      # of the pinned AGPL fork, and the rustup toolchain — all network fetches.
+      # Compiling the crate itself is ~8.5s (measured), which is not worth the
+      # risk of qualifying a rev-1 archive forever.
+      - name: Cache cargo registry, git checkouts and toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup
+          key: reckless-desktop-${{ runner.os }}-swift633noble-${{ hashFiles('rust-toolchain.toml', 'rust/Cargo.lock', 'Tools/build-desktop.sh') }}
+          restore-keys: |
+            reckless-desktop-${{ runner.os }}-swift633noble-
+
+      # The net is ~60 MB and immutable — its SHA-256 is in the cache key, so a
+      # hit is always the right file. verify-desktop-gate.sh re-verifies the
+      # checksum on every run regardless of where the file came from: a cache is
+      # an untrusted input, and a truncated net presents as a mysterious
+      # engine-init failure rather than a checksum error.
+      - name: Cache NNUE network
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: rust/networks
+          key: reckless-nnue-5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf
+
+      # --default-toolchain none: rust-toolchain.toml is the single source of
+      # truth for the version, and verify-desktop-gate.sh reads the channel out
+      # of that file and passes it to Tools/build-desktop.sh. Installing a
+      # default here would put a second, floating toolchain on the box.
+      - name: Install rustup (toolchain comes from rust-toolchain.toml)
+        run: |
+          set -euo pipefail
+          if [ ! -x "${HOME}/.cargo/bin/rustup" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
+          fi
+          echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+
+      # Everything that constitutes the gate. Builds the archive, builds BOTH
+      # arms from this one tree into separate scratch paths, runs both, and
+      # asserts the margin between them. Identical to what a developer runs
+      # locally — there is no CI-only logic.
+      - name: Build the archive, build both arms, assert the margin
+        run: bash Tools/verify-desktop-gate.sh
