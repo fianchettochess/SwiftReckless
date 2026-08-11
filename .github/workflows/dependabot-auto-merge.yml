@@ -1,0 +1,191 @@
+name: SwiftReckless — Dependabot auto-merge (patch only)
+
+# Merge Dependabot PATCH updates automatically, once CI has actually passed.
+#
+# WHY `workflow_run` AND NOT `pull_request` + `gh pr merge --auto`:
+#   `main` has no branch protection and no ruleset, so there are no REQUIRED
+#   status checks. GitHub's auto-merge waits only for required conditions, so
+#   `--auto` on this repository would merge immediately — before CI reports
+#   anything — while looking like a gate. This workflow instead waits for the
+#   CI run to COMPLETE and verifies its conclusion itself, so the gate is real
+#   without imposing branch protection on a repo whose normal workflow is
+#   committing straight to `main`.
+#
+# WHY THIS IS NOT THE `pull_request_target` PRIVILEGE-ESCALATION BUG:
+#   A `workflow_run` workflow is always read from the DEFAULT BRANCH, never
+#   from the pull request, and this job never checks out, fetches, or executes
+#   anything from the PR ref. There is no `actions/checkout` step by design.
+#   Every fact it acts on is read back from the API, and the write token is
+#   only ever handed to `gh`. PR-controlled code cannot run here.
+#
+# COST: one ubuntu-latest job, a few seconds, per COMPLETED run of the watched
+# CI workflow. Runs from pushes to `main` and from non-Dependabot PRs are
+# rejected by the job-level `if:`, and a skipped job bills no minutes. It
+# never polls and never watches checks, so it holds no runner open.
+
+on:
+  workflow_run:
+    # This MUST be the watched workflow's `name:` verbatim, em dash included.
+    # If it ever stops matching, this workflow simply never fires — the failure
+    # mode is "nothing merges", not "everything merges". Fail-closed by design.
+    workflows:
+      - "SwiftReckless — CI (Linux + Rust)"
+      # Added because this repo has TWO pull_request workflows. The desktop
+      # gate is paths-filtered on `rust/**`, which is exactly what a cargo
+      # lockfile bump touches, and it is far slower than ci.yml. If only
+      # ci.yml were watched, every cargo PR would fire this workflow while
+      # the desktop gate was still running, step 6 would correctly decline,
+      # and NOTHING would ever fire again — the automation would be silently
+      # dead on the one PR class it exists for. Watching both means whichever
+      # finishes last does the merge. Harmless while this file is absent from
+      # the default branch: an unmatched name simply never fires.
+      - "SwiftReckless — desktop real-archive gate (Linux x86_64)"
+    types: [completed]
+
+# No ambient permissions; the one job that needs a token asks for exactly two.
+permissions: {}
+
+# Merge one PR at a time so two Dependabot PRs cannot race the same base.
+concurrency:
+  group: dependabot-auto-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: SwiftReckless — verify and merge Dependabot patch updates
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Verify the Dependabot patch update, then merge it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_PATH: ${{ github.event.workflow_run.path }}
+          EXPECTED_CI_PATHS: ".github/workflows/ci.yml .github/workflows/ci-desktop-archive.yml"
+          # Paths whose contents execute on the persistent self-hosted runner.
+          # A `github-actions` patch bump rewrites every workflow file at once,
+          # but only the pull-request workflow is actually exercised by CI, so
+          # changes to these files would land unreviewed and then run on the
+          # owner's own machine. OWNER DECISION: clear this to auto-merge them
+          # anyway. Note that Dependabot bumps an action across all workflow
+          # files in a single PR, so a non-empty list here means `github-actions`
+          # updates in practice always stop for a human.
+          GUARDED_PATHS: ".github/workflows/ci-macos-trusted.yml .github/workflows/release.yml"
+        run: |
+          set -euo pipefail
+
+          fail() { echo "::error::$*"; exit 1; }
+          decline() { echo "::notice::not auto-merging — $*"; exit 0; }
+
+          # 0. The trigger matches on a workflow NAME, which is mutable. Pin the
+          #    identity to the workflow FILE as well, so a workflow that merely
+          #    shared the name could not stand in for the real gate. This is a
+          #    LIST because a repo may legitimately have more than one
+          #    pull_request workflow, and every one of them must be a known file.
+          MATCHED=0
+          for CANDIDATE in ${EXPECTED_CI_PATHS}; do
+            if [ "${CI_PATH}" = "${CANDIDATE}" ]; then MATCHED=1; fi
+          done
+          [ "${MATCHED}" = "1" ] \
+            || fail "watched run came from '${CI_PATH}'; expected one of: ${EXPECTED_CI_PATHS}"
+
+          # 1. Resolve the pull request from the commit CI actually tested.
+          PRS="$(gh api "repos/${GH_REPO}/commits/${HEAD_SHA}/pulls" \
+            --jq "[ .[]
+                    | select(.state == \"open\")
+                    | select(.base.ref == \"${DEFAULT_BRANCH}\")
+                    | select(.head.repo.full_name == \"${GH_REPO}\")
+                    | select(.user.login == \"dependabot[bot]\")
+                    | select(.head.ref | startswith(\"dependabot/\"))
+                    | .number ]")"
+          COUNT="$(jq -r 'length' <<< "${PRS}")"
+          [ "${COUNT}" != "0" ] || decline "no open Dependabot PR targets ${HEAD_SHA}"
+          [ "${COUNT}" = "1" ] || fail "${COUNT} PRs claim ${HEAD_SHA}; refusing to guess"
+          PR="$(jq -r '.[0]' <<< "${PRS}")"
+          echo "candidate: PR #${PR} at ${HEAD_SHA}"
+
+          # 2. The tip must still be the commit CI tested. If Dependabot (or
+          #    anyone) pushed after the run completed, that push is unverified.
+          PR_JSON="$(gh api "repos/${GH_REPO}/pulls/${PR}")"
+          CURRENT_SHA="$(jq -r '.head.sha' <<< "${PR_JSON}")"
+          [ "${CURRENT_SHA}" = "${HEAD_SHA}" ] \
+            || decline "PR #${PR} moved to ${CURRENT_SHA} after CI ran on ${HEAD_SHA}"
+          [ "$(jq -r '.draft' <<< "${PR_JSON}")" = "false" ] || decline "PR #${PR} is a draft"
+          [ "$(jq -r '.mergeable_state' <<< "${PR_JSON}")" != "dirty" ] \
+            || decline "PR #${PR} has conflicts"
+
+          # 3. Trust anchor. Dependabot's own commits are GitHub-signed; an
+          #    unverified commit means the metadata below cannot be trusted.
+          COMMIT="$(gh api "repos/${GH_REPO}/commits/${HEAD_SHA}")"
+          [ "$(jq -r '.author.login' <<< "${COMMIT}")" = "dependabot[bot]" ] \
+            || fail "${HEAD_SHA} was not authored by dependabot[bot]"
+          [ "$(jq -r '.commit.verification.verified' <<< "${COMMIT}")" = "true" ] \
+            || fail "${HEAD_SHA} has no valid signature"
+          [ "$(jq -r '.commit.verification.reason' <<< "${COMMIT}")" = "valid" ] \
+            || fail "${HEAD_SHA} signature reason is not 'valid'"
+
+          # 4. Take the update type from Dependabot's own metadata block inside
+          #    that verified commit, rather than comparing version strings here.
+          #    (dependabot/fetch-metadata cannot be used: it reads only
+          #    `context.payload.pull_request` and has no PR-number input, so it
+          #    does not run under `workflow_run`. This reproduces its trust
+          #    chain — verified Dependabot commit, then its declared type.)
+          MESSAGE="$(jq -r '.commit.message' <<< "${COMMIT}")"
+          TYPES="$(awk '
+            /^-{3}$/       { inblock = 1; next }
+            /^\.{3}$/      { inblock = 0 }
+            inblock && /^[[:space:]]*update-type:[[:space:]]*/ {
+              sub(/^[[:space:]]*update-type:[[:space:]]*/, "")
+              print
+            }' <<< "${MESSAGE}")"
+          [ -n "${TYPES}" ] || fail "no updated-dependencies metadata in ${HEAD_SHA}"
+          while IFS= read -r TYPE; do
+            [ "${TYPE}" = "version-update:semver-patch" ] \
+              || decline "PR #${PR} includes a '${TYPE}' update; patch only"
+          done <<< "${TYPES}"
+          echo "update types: $(tr '\n' ' ' <<< "${TYPES}")"
+
+          # 5. Blast-radius guard on files that execute on the self-hosted runner.
+          if [ -n "${GUARDED_PATHS}" ]; then
+            CHANGED="$(gh api --paginate "repos/${GH_REPO}/pulls/${PR}/files" \
+              --jq '.[].filename')"
+            for GUARD in ${GUARDED_PATHS}; do
+              if grep -qxF "${GUARD}" <<< "${CHANGED}"; then
+                decline "PR #${PR} modifies ${GUARD}, which runs on the self-hosted runner"
+              fi
+            done
+          fi
+
+          # 6. Re-verify every check on this commit directly. The triggering
+          #    run's conclusion covers only its own workflow; this also covers
+          #    any check added later, and refuses while anything is unfinished.
+          RUNS="$(gh api --paginate "repos/${GH_REPO}/commits/${HEAD_SHA}/check-runs" \
+            --jq '.check_runs[] | "\(.status)|\(.conclusion)|\(.name)"')"
+          [ -n "${RUNS}" ] || fail "no check runs recorded for ${HEAD_SHA}"
+          SAW_SUCCESS=0
+          while IFS='|' read -r STATUS CONCLUSION NAME; do
+            [ -n "${NAME}" ] || continue
+            [ "${STATUS}" = "completed" ] || decline "check '${NAME}' is still ${STATUS}"
+            case "${CONCLUSION}" in
+              success)          SAW_SUCCESS=1 ;;
+              neutral|skipped)  ;;
+              *)                decline "check '${NAME}' concluded ${CONCLUSION}" ;;
+            esac
+          done <<< "${RUNS}"
+          [ "${SAW_SUCCESS}" = "1" ] \
+            || fail "no check on ${HEAD_SHA} actually succeeded; refusing to merge unverified"
+
+          # 7. Everything above held. Merge the exact commit that was verified.
+          gh pr merge "${PR}" --repo "${GH_REPO}" --squash --delete-branch \
+            --match-head-commit "${HEAD_SHA}"
+          echo "::notice::merged PR #${PR} (${HEAD_SHA}) — patch update, CI green"
