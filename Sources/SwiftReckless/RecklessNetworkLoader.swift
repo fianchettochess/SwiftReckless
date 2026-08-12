@@ -34,8 +34,6 @@ import FoundationNetworking
 #endif
 #if canImport(CryptoKit)
 import CryptoKit
-#else
-import Crypto
 #endif
 
 /// Cancellation bridge for the callback-based URLSession API. Parent-task
