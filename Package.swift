@@ -112,22 +112,13 @@ let useBinaryEngine = hostIsApple && (underXcode || !forceSource)
 let desktopArchiveOptIn = Context.environment["SWIFTRECKLESS_LINK_ARCHIVE"] == "1"
 
 // SHA-256 backend for NNUE verification. Apple builds use CryptoKit from the
-// OS. Linux/Android builds need swift-crypto's source-compatible `Crypto`
-// module; keep it out of the normal Apple dependency graph just as
-// SwiftStockfish does.
-let cryptoPackageDependencies: [Package.Dependency]
-let cryptoTargetDependencies: [Target.Dependency]
-if useBinaryEngine {
-    cryptoPackageDependencies = []
-    cryptoTargetDependencies = []
-} else {
-    cryptoPackageDependencies = [
-        .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0"..<"5.0.0"),
-    ]
-    cryptoTargetDependencies = [
-        .product(name: "Crypto", package: "swift-crypto"),
-    ]
-}
+// OS. NON-APPLE hosts (Android/Linux) use the vendored streaming SHA256 in
+// Sources/SwiftReckless/SHA256.swift (FIPS 180-4, vector-tested) — no external
+// crypto dependency at all. This also avoids SwiftPM 6.3.3's Android
+// cross-build pruning of the `Crypto` module name, which dropped swift-crypto
+// from the plan ("no such module 'Crypto'").
+let cryptoPackageDependencies: [Package.Dependency] = []
+let cryptoTargetDependencies: [Target.Dependency] = []
 
 // ── Engine targets ────────────────────────────────────────────────────────────
 let engineTargets: [Target]
