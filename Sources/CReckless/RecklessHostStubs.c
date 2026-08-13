@@ -1,7 +1,8 @@
-// RecklessHostStubs.c — no-op rk_ffi_* definitions for non-Android builds of
-// the source arm (SWIFTRECKLESS_FORCE_SOURCE_BUILD=1). Not compiled in the
-// XCFramework (binary) arm: Package.swift lists this file only in the source
-// arm's `sources`, so it can never collide with the real symbols there.
+// RecklessHostStubs.c — no-op rk_ffi_* definitions for builds of the source
+// arm that have no real archive (SWIFTRECKLESS_FORCE_SOURCE_BUILD=1). Not
+// compiled in the XCFramework (binary) arm: Package.swift lists this file only
+// in the source arm's `sources`, so it can never collide with the real symbols
+// there.
 //
 // WHY THIS EXISTS (same pattern as Fianchetto's onnxruntime host-link fix):
 // the Skip/Gradle Android build runs a host-introspection SwiftPM build on
@@ -14,17 +15,24 @@
 // reporting success.
 //
 // Fix: the root Android application passes the Rust archive only for Android;
-// this dependency manifest contains no local archive path. Every non-Android
-// platform in the source arm resolves rk_ffi_* against these stubs so the host
-// dynamic library links. The engine is non-functional in that configuration by
+// this dependency manifest contains no local archive path. Every platform in
+// the source arm resolves rk_ffi_* against these stubs so the host dynamic
+// library links. The engine is non-functional in that configuration by
 // design; Apple-platform consumers use the XCFramework arm, which carries the
 // real Mach-O library.
 //
-// `__ANDROID__` is the reliable host-vs-device discriminator here (defined by
-// the aarch64-linux-android target triple; never on the host pass).
+// ANDROID: Android used to force the real-symbols path (the root application
+// supplied the archive) and excluded this file's bodies — until a shell face
+// that supplied no archive (the CMP Android host) crashed with
+// "cannot locate symbol rk_ffi_create" at load: Android's dlopen resolves
+// every symbol when a .so loads, unlike macOS. Android now takes the stub arm
+// by DEFAULT, exactly like the other source-arm platforms; a consumer that
+// supplies the cross-built archive opts in with SWIFTRECKLESS_LINK_ARCHIVE=1
+// + RECKLESS_LIB_DIR, which Package.swift folds into RECKLESS_LINK_ARCHIVE for
+// .android too.
 //
-// DESKTOP (Linux / Windows): the same "the real symbols come from elsewhere"
-// condition now has a second trigger. A desktop consumer that opts in with
+// DESKTOP/LINUX/WINDOWS: the same "the real symbols come from elsewhere"
+// condition has its own trigger. A consumer that opts in with
 // SWIFTRECKLESS_LINK_ARCHIVE=1 supplies a real `libcreckless.a` /
 // `creckless.lib`, and Package.swift then defines RECKLESS_LINK_ARCHIVE for
 // that platform. Both triggers are folded into RECKLESS_BACKEND_IS_STUB in the

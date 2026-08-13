@@ -17,11 +17,14 @@
 //                       Tools/build-xcframework.sh).  In the source arm
 //                       (Android / desktop / forced source) the same C bridge
 //                       compiles; `RecklessHostStubs.c` provides no-op symbols
-//                       for any platform in that arm which has NOT been told
-//                       that a real archive is coming. On Android, and on
-//                       Linux/Windows under SWIFTRECKLESS_LINK_ARCHIVE=1, the
-//                       root application supplies the Rust archive as a link
-//                       input and the stubs compile to nothing.
+//                       for every platform in that arm that has NOT opted into
+//                       a real archive (SWIFTRECKLESS_LINK_ARCHIVE=1 +
+//                       RECKLESS_LIB_DIR). Android stubs by DEFAULT — an
+//                       Android dylib face with no supplied archive otherwise
+//                       fails to load ("cannot locate symbol rk_ffi_create",
+//                       because Android resolves every symbol at dlopen) — and
+//                       Android consumers that DO supply the cross-built Rust
+//                       archive opt in the same way as Linux/Windows.
 //                       `rk_backend_is_stub()` / `RecklessBackend.current`
 //                       report which of the two a build actually got.
 //
@@ -202,21 +205,23 @@ if useBinaryEngine {
     ]
 
     if desktopArchiveOptIn {
-        // 1. Stop compiling stubs for the opted-in desktop platforms. This is
+        // 1. Stop compiling stubs for the opted-in platforms. This is
         //    the load-bearing half: a stub object file always beats an archive
         //    member, so leaving them in would link a silent no-op engine on top
-        //    of a perfectly good archive.
+        //    of a perfectly good archive. Android is included: an Android
+        //    consumer that supplies the cross-built libcreckless.a opts in the
+        //    same way as desktop (SWIFTRECKLESS_LINK_ARCHIVE=1 + RECKLESS_LIB_DIR).
         sourceCSettings.append(
-            .define("RECKLESS_LINK_ARCHIVE", to: "1", .when(platforms: [.linux, .windows]))
+            .define("RECKLESS_LINK_ARCHIVE", to: "1", .when(platforms: [.linux, .windows, .android]))
         )
         // 2. Ask for the archive by name. `.linkedLibrary` is a SAFE setting, so
         //    this survives in a tagged dependency; the consumer supplies the
         //    search path. If they opted in and supplied nothing, the link fails
         //    here — which is the intended, loud outcome.
-        //    `-lcreckless` resolves to `libcreckless.a` (Linux) and
+        //    `-lcreckless` resolves to `libcreckless.a` (Linux/Android) and
         //    `creckless.lib` (MSVC), the two names cargo already emits.
         sourceLinkerSettings.append(
-            .linkedLibrary("creckless", .when(platforms: [.linux, .windows]))
+            .linkedLibrary("creckless", .when(platforms: [.linux, .windows, .android]))
         )
         // 3. The Rust staticlib's own native dependencies, from the
         //    `--print native-static-libs` lists above. libc/libgcc_s come from

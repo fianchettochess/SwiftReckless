@@ -17,28 +17,37 @@
 //                         real engine out of RecklessFFI.xcframework and never
 //                         defines this.
 //
-//   __ANDROID__           Set by the Android target triple. On Android the root
-//                         application supplies a cross-built `libcreckless.a`
-//                         as a link input, so the real symbols are present and
-//                         the stubs must NOT be compiled (they would shadow
-//                         them: a stub object file always wins over an archive
-//                         member, which is only pulled in to satisfy a symbol
-//                         that is still undefined).
+//   __ANDROID__           Set by the Android target triple. Android historically
+//                         demanded that the root application supply a
+//                         cross-built `libcreckless.a` and that the stubs NOT
+//                         be compiled (they would shadow archive members).
+//                         That left Android dylib consumers who supply no
+//                         archive — e.g. the CMP shell — with `rk_ffi_*`
+//                         undefined at dlopen time, which Android refuses
+//                         (it resolves every symbol when a .so loads; macOS
+//                         tolerates the gap, which is how it slipped past the
+//                         desktop builds). Android now stubs by DEFAULT like the
+//                         other source-arm platforms, so a no-archive build
+//                         loads and honestly reports `rk_backend_is_stub()`.
+//                         Consumers who DO supply a real archive opt in the
+//                         same way as Linux/Windows: set
+//                         SWIFTRECKLESS_LINK_ARCHIVE=1 and provide
+//                         RECKLESS_LIB_DIR, which Package.swift folds into
+//                         RECKLESS_LINK_ARCHIVE for .android too.
 //
 //   RECKLESS_LINK_ARCHIVE Defined by Package.swift, per platform, when the
 //                         consumer opted in with SWIFTRECKLESS_LINK_ARCHIVE=1
 //                         and therefore promises a real archive on the linker
-//                         search path. Currently gated to Linux and Windows;
-//                         it carries exactly the same meaning as __ANDROID__
-//                         above — "the real symbols are coming from elsewhere,
-//                         do not define stubs".
+//                         search path. Gated to Linux, Windows and Android; it
+//                         carries the meaning "the real symbols are coming from
+//                         elsewhere, do not define stubs".
 //
 // The stub arm is a deliberate, documented configuration (it keeps the
 // Skip/Gradle host-introspection link working), but it is NEVER a silent one:
 // `rk_backend_is_stub()` reports it to the C consumer, `RecklessBackend.current`
 // reports it to the Swift consumer, and `RecklessEngine.init?` logs it.
 
-#if defined(RECKLESS_SOURCE_ARM) && !defined(__ANDROID__) && !defined(RECKLESS_LINK_ARCHIVE)
+#if defined(RECKLESS_SOURCE_ARM) && !defined(RECKLESS_LINK_ARCHIVE)
 #  define RECKLESS_BACKEND_IS_STUB 1
 #else
 #  define RECKLESS_BACKEND_IS_STUB 0
