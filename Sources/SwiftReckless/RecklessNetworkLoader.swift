@@ -36,6 +36,18 @@ import FoundationNetworking
 import CryptoKit
 #endif
 
+/// The SHA-256 implementation used to verify downloaded nets. Apple platforms
+/// get CryptoKit's hardware-accelerated hasher; everywhere else falls back to
+/// the vendored FIPS 180-4 implementation. This alias is deliberate: naming
+/// the vendored type `SHA256` instead would shadow `CryptoKit.SHA256` here
+/// with no diagnostic, because both digests are `UInt8` collections. Twin of
+/// SwiftStockfish's `NetworkHasher`.
+#if canImport(CryptoKit)
+typealias NetworkHasher = CryptoKit.SHA256
+#else
+typealias NetworkHasher = VendoredSHA256
+#endif
+
 /// Cancellation bridge for the callback-based URLSession API. Parent-task
 /// cancellation can race task creation, so the state and task reference share
 /// one lock. Deliberate twin of SwiftStockfish's StockfishDownloadTaskBox —
@@ -454,7 +466,7 @@ public struct RecklessNetworkLoader: Sendable {
         }
         defer { handle.closeFile() }
 
-        var hasher = SHA256()
+        var hasher = NetworkHasher()
         while true {
             let chunk = handle.readData(ofLength: 1 << 20)
             if chunk.isEmpty { break }

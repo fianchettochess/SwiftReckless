@@ -30,10 +30,10 @@ import Foundation
 ///
 /// Usage mirrors CryptoKit's `SHA256`:
 ///
-///     var hasher = SHA256()
+///     var hasher = VendoredSHA256()
 ///     hasher.update(data: chunk)
 ///     let digest: [UInt8] = hasher.finalize() // 32 bytes, big-endian words
-public struct SHA256 {
+public struct VendoredSHA256 {
     /// Initial hash values — the fractional parts of the square roots of the
     /// first eight primes (FIPS 180-4 §5.3.3).
     private var state: [UInt32] = [

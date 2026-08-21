@@ -18,14 +18,14 @@ final class SHA256Tests: XCTestCase {
     }
 
     private func digest(_ string: String) -> String {
-        var hasher = SHA256()
+        var hasher = VendoredSHA256()
         hasher.update(data: Data(string.utf8))
         return hex(hasher.finalize())
     }
 
     private func digestChunked(_ string: String, chunk: Int) -> String {
         let data = Data(string.utf8)
-        var hasher = SHA256()
+        var hasher = VendoredSHA256()
         var offset = 0
         while offset < data.count {
             let end = min(offset + chunk, data.count)
