@@ -109,20 +109,29 @@ case "$GATE_TARGET" in
         RECORDED_ARCHIVE_BYTES=23699394
         RECORDED_ARCHIVE_SHA=4050d065b04693b8e3f7652f587972208371ba016577c7f340a678da6e651007
         RECORDED_REAL_BYTES=18751880
-        RECORDED_STUB_BYTES=13016520 ;;
+        RECORDED_STUB_BYTES=13016520
+        SIZE_FLOOR=3000000 ;;
     windows)
         TRIPLE="x86_64-pc-windows-msvc"; ARCHIVE_NAME="creckless.lib"
         WANT_OS="Windows"; WANT_ARCH="x86_64"; EXE_SUFFIX=".exe"
-        # Not yet recorded: this gate has never run green on Windows. The first
-        # green run establishes these, and until then the size comparisons below
-        # report as unrecorded rather than pretending to a baseline.
-        RECORDED_ARCHIVE_BYTES=0; RECORDED_ARCHIVE_SHA=""
-        RECORDED_REAL_BYTES=0; RECORDED_STUB_BYTES=0 ;;
+        # Recorded 2026-09-01, run 33512302335 on windows-latest, Swift 6.3.3,
+        # the first run in which this engine ever searched on Windows.
+        RECORDED_ARCHIVE_BYTES=13969048
+        # No sha recorded: the archive built on a macOS host and the one built
+        # on the runner differ (13,968,936 vs 13,969,048), so there is no stable
+        # value to hold anyone to yet. Recording one now would produce a
+        # permanent advisory warning that means nothing.
+        RECORDED_ARCHIVE_SHA=""
+        RECORDED_REAL_BYTES=2383360; RECORDED_STUB_BYTES=483328
+        SIZE_FLOOR=1000000 ;;
     windows-arm64)
         TRIPLE="aarch64-pc-windows-msvc"; ARCHIVE_NAME="creckless.lib"
         WANT_OS="Windows"; WANT_ARCH="arm64"; EXE_SUFFIX=".exe"
-        RECORDED_ARCHIVE_BYTES=0; RECORDED_ARCHIVE_SHA=""
-        RECORDED_REAL_BYTES=0; RECORDED_STUB_BYTES=0 ;;
+        # Recorded 2026-09-01, run 33512302335 on windows-11-arm.
+        RECORDED_ARCHIVE_BYTES=13641402
+        RECORDED_ARCHIVE_SHA=""
+        RECORDED_REAL_BYTES=2308096; RECORDED_STUB_BYTES=498688
+        SIZE_FLOOR=1000000 ;;
     *)
         echo "error: unknown gate target '$GATE_TARGET'" >&2
         echo "       (use: linux | windows | windows-arm64)" >&2; exit 2 ;;
@@ -536,11 +545,26 @@ if [ "$RECORDED_REAL_BYTES" -gt 0 ]; then
 else
     info "real $REAL_BYTES bytes, stub $STUB_BYTES bytes, delta $DELTA (no recorded baseline for $GATE_TARGET)"
 fi
-# Floor well under the recorded 5,735,360 so engine growth or a Swift runtime
-# change cannot trip it, but far above any plausible noise.
-[ "$DELTA" -gt 3000000 ] \
-    && pass "real binary is $DELTA bytes larger than the stub (floor 3,000,000)" \
-    || fail "real/stub size delta is only $DELTA bytes — the two arms look like the same build"
+# PER TARGET, because absolute binary sizes are not comparable across platforms
+# and a single constant here was a Linux constant. Measured 2026-09-01:
+#
+#   Linux           real 18,751,880  stub 13,016,520  delta 5,735,360
+#   Windows x86_64  real  2,383,360  stub    483,328  delta 1,900,032
+#   Windows ARM64   real  2,308,096  stub    498,688  delta 1,809,408
+#
+# The Windows executables are an order of magnitude smaller overall because
+# Swift links its runtime as DLLs there and statically on Linux — so the ENGINE
+# is a larger fraction of a much smaller binary (4.9x stub versus 1.4x). The
+# 3,000,000 floor was right for Linux and would have failed Windows forever
+# while every other assertion passed.
+#
+# What this check is for is catching "the two arms are the same build", which
+# shows as a delta near zero. It is also the weakest of the four margin
+# assertions: 6c above proves the engine is physically in one binary and absent
+# from the other, which no size heuristic can match.
+[ "$DELTA" -gt "$SIZE_FLOOR" ] \
+    && pass "real binary is $DELTA bytes larger than the stub (floor $SIZE_FLOOR)" \
+    || fail "real/stub size delta is only $DELTA bytes (floor $SIZE_FLOOR) — the two arms look like the same build"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. Verdict
