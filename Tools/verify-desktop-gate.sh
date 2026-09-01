@@ -193,19 +193,30 @@ esac
 # itself emulated or WOW64; PROCESSOR_ARCHITECTURE is the process's own. Reading
 # the first and falling back to the second gets the host either way.
 if [ "$HOST_OS" = "Windows" ]; then
+    # THE OS STRING IS THE ONLY SIGNAL THAT SURVIVES EMULATION, and this took
+    # two runs to establish. On a `windows-11-arm` runner, measured 2026-09-01:
+    #
+    #     uname -m                  x86_64     (the Git Bash binary's own arch)
+    #     PROCESSOR_ARCHITEW6432    AMD64      (run 33511720097)
+    #     PROCESSOR_ARCHITECTURE    AMD64
+    #     uname -s                  MINGW64_NT-10.0-26200-ARM64
+    #
+    # Prism reports AMD64 to an emulated process for BOTH environment
+    # variables, so the documented "native architecture" variable is not native
+    # here either. MSYS builds its OS string from the real host, and that one
+    # line is what actually knows. Check it first; the variables are a fallback
+    # for a shell that reports the OS differently.
     WIN_ARCH="${PROCESSOR_ARCHITEW6432:-${PROCESSOR_ARCHITECTURE:-}}"
-    case "$WIN_ARCH" in
-        ARM64|arm64)      HOST_ARCH="arm64" ;;
-        AMD64|amd64|x86_64) HOST_ARCH="x86_64" ;;
+    case "$OS" in
+        *ARM64*|*arm64*) HOST_ARCH="arm64" ;;
         *)
-            # No usable environment variable. Fall back to the OS string, which
-            # does carry the host architecture even under emulation.
-            case "$OS" in
-                *ARM64*|*arm64*) HOST_ARCH="arm64" ;;
-                *)               HOST_ARCH="x86_64" ;;
+            case "$WIN_ARCH" in
+                ARM64|arm64)        HOST_ARCH="arm64" ;;
+                AMD64|amd64|x86_64) HOST_ARCH="x86_64" ;;
+                *)                  HOST_ARCH="x86_64" ;;
             esac ;;
     esac
-    info "host arch: $HOST_ARCH (uname -m said '$ARCH'; PROCESSOR_ARCHITEW6432/ARCHITECTURE said '${WIN_ARCH:-<unset>}')"
+    info "host arch: $HOST_ARCH (from uname -s '$OS'; uname -m said '$ARCH', PROCESSOR_ARCHITE* said '${WIN_ARCH:-<unset>}')"
 fi
 
 if [ "$HOST_OS" != "$WANT_OS" ] || [ "$HOST_ARCH" != "$WANT_ARCH" ]; then
@@ -405,9 +416,26 @@ if [ "$WANT_OS" = "Windows" ]; then
     # measured on windows-latest, 2026-09-01 (run 33511148781). Excluding that
     # one prefix from conversion is narrower than MSYS_NO_PATHCONV=1, which
     # would also stop the conversions that are wanted elsewhere in this script.
+    # TWO DISTINCT PROBLEMS, and fixing only the first swaps one for the other.
+    #
+    #   1. MSYS rewrites arguments that look like Unix paths, so an unprotected
+    #      `/LIBPATH:...` reached lld as
+    #      'C:\Program Files\Git\LIBPATH;D:\a\...' (run 33511148781).
+    #   2. Excluding it from conversion then passed the Unix form through
+    #      verbatim — `/LIBPATH:/d/a/SwiftReckless/...` — and lld reported
+    #      "could not open 'creckless.lib': no such file or directory", because
+    #      a native linker cannot read an MSYS path (run 33511720097).
+    #
+    # So: convert the directory to a Windows path deliberately with cygpath,
+    # AND suppress the automatic conversion so the result is not mangled again.
     export MSYS2_ARG_CONV_EXCL="/LIBPATH:"
-    REAL_ARGS=(-Xlinker "/LIBPATH:$ARCHIVE_DIR")
-    SEARCH_DESC="-Xlinker /LIBPATH:$ARCHIVE_DIR"
+    if command -v cygpath >/dev/null 2>&1; then
+        WIN_ARCHIVE_DIR="$(cygpath -w "$ARCHIVE_DIR")"
+    else
+        WIN_ARCHIVE_DIR="$ARCHIVE_DIR"
+    fi
+    REAL_ARGS=(-Xlinker "/LIBPATH:$WIN_ARCHIVE_DIR")
+    SEARCH_DESC="-Xlinker /LIBPATH:$WIN_ARCHIVE_DIR"
 else
     REAL_ENV+=("LIBRARY_PATH=$ARCHIVE_DIR")
     SEARCH_DESC="LIBRARY_PATH=$ARCHIVE_DIR"
