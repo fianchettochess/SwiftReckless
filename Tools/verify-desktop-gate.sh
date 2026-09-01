@@ -177,6 +177,37 @@ case "$ARCH" in
     *)             HOST_ARCH="$ARCH" ;;
 esac
 
+# `uname -m` IS NOT THE HOST ARCHITECTURE ON WINDOWS. It reports the
+# architecture of the Git Bash BINARY, and Git for Windows ships x64 binaries
+# that run under emulation on ARM64 — so an ARM64 machine says x86_64.
+#
+# MEASURED on a `windows-11-arm` runner, 2026-09-01 (run 33511148781):
+#
+#     host: MINGW64_NT-10.0-26200-ARM64 x86_64
+#
+# The OS string knows it is ARM64; the machine string does not. This gate exists
+# partly to refuse measuring emulation, so being fooled by emulation in its own
+# precondition would have been the funnier half of the same bug.
+#
+# PROCESSOR_ARCHITEW6432 is the native architecture when the current process is
+# itself emulated or WOW64; PROCESSOR_ARCHITECTURE is the process's own. Reading
+# the first and falling back to the second gets the host either way.
+if [ "$HOST_OS" = "Windows" ]; then
+    WIN_ARCH="${PROCESSOR_ARCHITEW6432:-${PROCESSOR_ARCHITECTURE:-}}"
+    case "$WIN_ARCH" in
+        ARM64|arm64)      HOST_ARCH="arm64" ;;
+        AMD64|amd64|x86_64) HOST_ARCH="x86_64" ;;
+        *)
+            # No usable environment variable. Fall back to the OS string, which
+            # does carry the host architecture even under emulation.
+            case "$OS" in
+                *ARM64*|*arm64*) HOST_ARCH="arm64" ;;
+                *)               HOST_ARCH="x86_64" ;;
+            esac ;;
+    esac
+    info "host arch: $HOST_ARCH (uname -m said '$ARCH'; PROCESSOR_ARCHITEW6432/ARCHITECTURE said '${WIN_ARCH:-<unset>}')"
+fi
+
 if [ "$HOST_OS" != "$WANT_OS" ] || [ "$HOST_ARCH" != "$WANT_ARCH" ]; then
     echo "error: target '$GATE_TARGET' needs a $WANT_OS $WANT_ARCH host; this is $HOST_OS $HOST_ARCH." >&2
     echo "       Tools/build-desktop.sh can CROSS-build the archive from any host (a" >&2
@@ -364,6 +395,17 @@ rm -rf "$STUB_SCRATCH" "$REAL_SCRATCH"
 REAL_ENV=(SWIFTRECKLESS_LINK_ARCHIVE=1)
 REAL_ARGS=()
 if [ "$WANT_OS" = "Windows" ]; then
+    # MSYS REWRITES ARGUMENTS THAT LOOK LIKE UNIX PATHS. `/LIBPATH:...` begins
+    # with a slash, so Git Bash converted it on the way to the linker and lld
+    # was handed a directory that does not exist:
+    #
+    #     lld-link: error: could not open
+    #       'C:\Program Files\Git\LIBPATH;D:\a\...\release': invalid argument
+    #
+    # measured on windows-latest, 2026-09-01 (run 33511148781). Excluding that
+    # one prefix from conversion is narrower than MSYS_NO_PATHCONV=1, which
+    # would also stop the conversions that are wanted elsewhere in this script.
+    export MSYS2_ARG_CONV_EXCL="/LIBPATH:"
     REAL_ARGS=(-Xlinker "/LIBPATH:$ARCHIVE_DIR")
     SEARCH_DESC="-Xlinker /LIBPATH:$ARCHIVE_DIR"
 else
