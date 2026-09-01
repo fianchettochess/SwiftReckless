@@ -29,11 +29,12 @@
 #
 # USAGE
 #   bash Tools/build-desktop.sh                 # host-native desktop target
-#   bash Tools/build-desktop.sh linux windows   # both, explicitly
+#   bash Tools/build-desktop.sh linux windows windows-arm64
 #
 # OUTPUT (also printed, with the exact env the consumer needs)
 #   rust/target/x86_64-unknown-linux-gnu/release/libcreckless.a
 #   rust/target/x86_64-pc-windows-msvc/release/creckless.lib
+#   rust/target/aarch64-pc-windows-msvc/release/creckless.lib
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -69,13 +70,38 @@ STABLE_TOOLCHAIN="${RUST_STABLE_TOOLCHAIN:-1.96.1}"
 #
 # To build for an older baseline:  RECKLESS_TARGET_FEATURES=+popcnt ./build-desktop.sh
 # Expect a measurable strength loss; the engine is SIMD-bound.
-TARGET_FEATURES="${RECKLESS_TARGET_FEATURES:-+avx2,+bmi2,+popcnt}"
+# PER TARGET, because the baseline is an x86 statement. `+avx2,+bmi2,+popcnt`
+# describes Haswell; on aarch64 those feature names do not exist and rustc
+# accepts them with a warning rather than an error, which would leave an ARM
+# archive built by a line that reads as though it had asked for something.
+# NEON is mandatory in the aarch64 base ISA, so the ARM targets need no
+# `target-feature` at all to get vectorised code.
+#
+# RECKLESS_TARGET_FEATURES still overrides, for every target, unchanged.
+features_for_triple() {
+    if [ -n "${RECKLESS_TARGET_FEATURES+x}" ]; then
+        printf '%s' "$RECKLESS_TARGET_FEATURES"
+        return
+    fi
+    case "$1" in
+        x86_64-*)  printf '%s' "+avx2,+bmi2,+popcnt" ;;
+        aarch64-*) printf '%s' "" ;;
+        *)         printf '%s' "" ;;
+    esac
+}
 
 # CARGO_ENCODED_RUSTFLAGS keeps paths with spaces intact. Broad home mapping
 # first so the more specific roots take precedence (mirrors build-android.sh).
 encoded_rustflags() {
-    local -a flags=(
-        -C "target-feature=$TARGET_FEATURES"
+    local features="$1"
+    local -a flags=()
+    # An empty feature string must produce NO flag rather than an empty one:
+    # `-C target-feature=` is accepted but says nothing, and printing it would
+    # imply a baseline was chosen when none was.
+    if [ -n "$features" ]; then
+        flags+=(-C "target-feature=$features")
+    fi
+    flags+=(
         "--remap-path-prefix=$HOME=/build/user"
         "--remap-path-prefix=$BUILD_TMP_DIR=/build/tmp"
         "--remap-path-prefix=$BUILD_CARGO_HOME=/build/cargo"
@@ -90,7 +116,9 @@ resolve_triple() {
     case "$1" in
         linux|x86_64-unknown-linux-gnu)   echo "x86_64-unknown-linux-gnu" ;;
         windows|x86_64-pc-windows-msvc)   echo "x86_64-pc-windows-msvc" ;;
-        *) echo "error: unknown desktop target '$1' (use: linux | windows)" >&2; exit 2 ;;
+        windows-arm64|aarch64-pc-windows-msvc) echo "aarch64-pc-windows-msvc" ;;
+        *) echo "error: unknown desktop target '$1'" >&2
+           echo "       (use: linux | windows | windows-arm64)" >&2; exit 2 ;;
     esac
 }
 
@@ -99,9 +127,16 @@ if [ "$#" -gt 0 ]; then
 else
     case "$(uname -s)" in
         Linux)                 REQUESTED=("linux") ;;
-        MINGW*|MSYS*|CYGWIN*)  REQUESTED=("windows") ;;
-        *) echo "error: no host-native desktop target on $(uname -s); name one explicitly:" >&2
-           echo "  bash Tools/build-desktop.sh linux windows" >&2; exit 2 ;;
+        MINGW*|MSYS*|CYGWIN*)
+            # Arch-aware: a Windows-on-ARM host defaulting to the x86_64 target
+            # would silently build an archive it cannot run, and the gate that
+            # follows would then be testing emulation without saying so.
+            case "$(uname -m)" in
+                aarch64|arm64) REQUESTED=("windows-arm64") ;;
+                *)             REQUESTED=("windows") ;;
+            esac ;;
+        *) echo "error: no host-native desktop target on $(uname -s) $(uname -m); name one explicitly:" >&2
+           echo "  bash Tools/build-desktop.sh linux windows windows-arm64" >&2; exit 2 ;;
     esac
 fi
 
@@ -113,13 +148,14 @@ build_target() {
     echo ""
     echo "==> rustup target add $triple"
     "$RUSTUP" target add "$triple" --toolchain "$STABLE_TOOLCHAIN"
+    local features; features="$(features_for_triple "$triple")"
     echo "==> cargo build --release --target $triple"
-    echo "    target features: $TARGET_FEATURES (build paths remapped)"
+    echo "    target features: ${features:-<none: base ISA>} (build paths remapped)"
     # --print native-static-libs is not decoration: it is the authoritative list
     # of what the final link needs alongside this archive, and Package.swift's
     # desktop linkerSettings are transcribed from it. If a Rust or engine
     # upgrade changes this line, those settings must change with it.
-    CARGO_ENCODED_RUSTFLAGS="$(encoded_rustflags)$(printf '\x1f--print\x1fnative-static-libs')" \
+    CARGO_ENCODED_RUSTFLAGS="$(encoded_rustflags "$features")$(printf '\x1f--print\x1fnative-static-libs')" \
         "$RUSTUP" run "$STABLE_TOOLCHAIN" cargo build \
             --manifest-path "$RUST_DIR/Cargo.toml" \
             --locked --release --target "$triple"

@@ -42,11 +42,33 @@
 # and adds nothing but a runner, a cache and a net download, so a red gate is
 # reproducible with:
 #
-#     bash Tools/verify-desktop-gate.sh
+#     bash Tools/verify-desktop-gate.sh                 # host-native
+#     bash Tools/verify-desktop-gate.sh windows         # x86_64 Windows
+#     bash Tools/verify-desktop-gate.sh windows-arm64   # ARM64 Windows
 #
-# PREREQUISITES: Linux x86_64 with rustup, a Swift toolchain, a C toolchain
-# (cargo links the staticlib with `cc`), and the NNUE net staged at
-# rust/networks/ (the script downloads and verifies it if missing).
+# PARAMETERISED BY TARGET, AND THAT IS THE POINT RATHER THAN A CONVENIENCE.
+# Until 2026-09-01 this script hardcoded x86_64-unknown-linux-gnu and refused
+# every other host in its preconditions, so there was no Windows gate for EITHER
+# architecture — which meant "ARM64 cannot be verified" was really "Windows
+# cannot be verified", and the two looked like separate problems while being one.
+# Nothing in this repository had ever run a Reckless search on Windows.
+#
+# The margin below is the whole assertion and it does not vary by platform, so
+# the platform belongs in a table at the top rather than in the reasoning. What
+# genuinely differs is four things: the archive's name (`libcreckless.a` versus
+# `creckless.lib`), how the linker is told where to find it, the executable
+# suffix, and how CPU features are checked.
+#
+# THE SEARCH PATH IS NOT `LIB` ON WINDOWS, and the reason is already recorded in
+# Tools/build-desktop.sh: defining LIB outside a Visual Studio developer prompt
+# stops clang auto-detecting the MSVC and Windows SDK library directories and
+# breaks the link on msvcrt.lib / oldnames.lib / msvcprt.lib. `-Xlinker
+# /LIBPATH:` adds one directory without displacing that detection.
+#
+# PREREQUISITES: a host that can RUN the target — cross-building the archive is
+# possible from anywhere (a staticlib needs no linker), but running the search is
+# the entire point — plus rustup, a Swift toolchain, a C toolchain, and the NNUE
+# net staged at rust/networks/ (downloaded and verified here if missing).
 #
 # AGPL: this builds the AGPL-3.0 engine fork from the tag pinned in
 # rust/Cargo.lock, via Tools/build-desktop.sh with cargo's `--locked`. Do not
@@ -60,21 +82,59 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
-TRIPLE="x86_64-unknown-linux-gnu"
+# ── Target table ────────────────────────────────────────────────────────────
+# One row per gateable target. Everything platform-specific in this script is
+# derived here and nowhere else.
+GATE_TARGET="${1:-}"
+if [ -z "$GATE_TARGET" ]; then
+    case "$(uname -s)" in
+        Linux)                GATE_TARGET="linux" ;;
+        MINGW*|MSYS*|CYGWIN*)
+            case "$(uname -m)" in
+                aarch64|arm64) GATE_TARGET="windows-arm64" ;;
+                *)             GATE_TARGET="windows" ;;
+            esac ;;
+        *) echo "error: no host-native gate target on $(uname -s) $(uname -m)." >&2
+           echo "       Name one: linux | windows | windows-arm64" >&2
+           echo "       (the archive cross-builds from any host, but only a matching" >&2
+           echo "        host can RUN the search, which is what this gate asserts)" >&2
+           exit 2 ;;
+    esac
+fi
+
+case "$GATE_TARGET" in
+    linux)
+        TRIPLE="x86_64-unknown-linux-gnu"; ARCHIVE_NAME="libcreckless.a"
+        WANT_OS="Linux"; WANT_ARCH="x86_64"; EXE_SUFFIX=""
+        RECORDED_ARCHIVE_BYTES=23699394
+        RECORDED_ARCHIVE_SHA=4050d065b04693b8e3f7652f587972208371ba016577c7f340a678da6e651007
+        RECORDED_REAL_BYTES=18751880
+        RECORDED_STUB_BYTES=13016520 ;;
+    windows)
+        TRIPLE="x86_64-pc-windows-msvc"; ARCHIVE_NAME="creckless.lib"
+        WANT_OS="Windows"; WANT_ARCH="x86_64"; EXE_SUFFIX=".exe"
+        # Not yet recorded: this gate has never run green on Windows. The first
+        # green run establishes these, and until then the size comparisons below
+        # report as unrecorded rather than pretending to a baseline.
+        RECORDED_ARCHIVE_BYTES=0; RECORDED_ARCHIVE_SHA=""
+        RECORDED_REAL_BYTES=0; RECORDED_STUB_BYTES=0 ;;
+    windows-arm64)
+        TRIPLE="aarch64-pc-windows-msvc"; ARCHIVE_NAME="creckless.lib"
+        WANT_OS="Windows"; WANT_ARCH="arm64"; EXE_SUFFIX=".exe"
+        RECORDED_ARCHIVE_BYTES=0; RECORDED_ARCHIVE_SHA=""
+        RECORDED_REAL_BYTES=0; RECORDED_STUB_BYTES=0 ;;
+    *)
+        echo "error: unknown gate target '$GATE_TARGET'" >&2
+        echo "       (use: linux | windows | windows-arm64)" >&2; exit 2 ;;
+esac
+
 ARCHIVE_DIR="$REPO_ROOT/rust/target/$TRIPLE/release"
-ARCHIVE="$ARCHIVE_DIR/libcreckless.a"
+ARCHIVE="$ARCHIVE_DIR/$ARCHIVE_NAME"
 
 NET_NAME="v54-5478683c.nnue"
 NET_SHA="5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf"
 NET_URL="https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/$NET_NAME"
 NET_DIR="$REPO_ROOT/rust/networks"
-
-# Recorded on 2026-08-10: Ubuntu 24.04 x86_64, Swift 6.3.3, SwiftReckless
-# 703f92a, Rust 1.96.1, fork tag swiftreckless-v0.9.1 = de35beac.
-RECORDED_ARCHIVE_BYTES=23699394
-RECORDED_ARCHIVE_SHA=4050d065b04693b8e3f7652f587972208371ba016577c7f340a678da6e651007
-RECORDED_REAL_BYTES=18751880
-RECORDED_STUB_BYTES=13016520
 
 # Separate scratch paths per arm. Not cosmetic: it guarantees the two arms
 # cannot share a build plan, a manifest cache, or a linked binary, so "the stub
@@ -104,12 +164,27 @@ size_of() { wc -c < "$1" | tr -d ' '; }
 say "Host preconditions"
 
 OS="$(uname -s)"; ARCH="$(uname -m)"
-info "host: $OS $ARCH"
-if [ "$OS" != "Linux" ] || [ "$ARCH" != "x86_64" ]; then
-    echo "error: this gate must run on Linux x86_64." >&2
-    echo "       Tools/build-desktop.sh can CROSS-build the ELF archive from any host" >&2
-    echo "       (a staticlib needs no linker), but only Linux can RUN the search," >&2
-    echo "       and running the search is the entire point of this gate." >&2
+info "host:   $OS $ARCH"
+info "target: $GATE_TARGET ($TRIPLE)"
+
+case "$OS" in
+    Linux)                HOST_OS="Linux" ;;
+    MINGW*|MSYS*|CYGWIN*) HOST_OS="Windows" ;;
+    *)                    HOST_OS="$OS" ;;
+esac
+case "$ARCH" in
+    aarch64|arm64) HOST_ARCH="arm64" ;;
+    *)             HOST_ARCH="$ARCH" ;;
+esac
+
+if [ "$HOST_OS" != "$WANT_OS" ] || [ "$HOST_ARCH" != "$WANT_ARCH" ]; then
+    echo "error: target '$GATE_TARGET' needs a $WANT_OS $WANT_ARCH host; this is $HOST_OS $HOST_ARCH." >&2
+    echo "       Tools/build-desktop.sh can CROSS-build the archive from any host (a" >&2
+    echo "       staticlib needs no linker), but only a matching host can RUN the" >&2
+    echo "       search, and running the search is the entire point of this gate." >&2
+    echo "       An x86_64 binary does run under emulation on ARM64 Windows — which is" >&2
+    echo "       exactly why this refuses rather than allowing it: a gate that silently" >&2
+    echo "       measured Prism would report the wrong thing green." >&2
     exit 2
 fi
 
@@ -118,7 +193,14 @@ fi
 # with SIGILL mid-search. Checking here converts an unexplained crash into a
 # one-line message, before any compile time is spent. Both self-hosted macOS
 # jobs already do the sysctl equivalent.
-if [ "${RECKLESS_TARGET_FEATURES:-+avx2,+bmi2,+popcnt}" = "+avx2,+bmi2,+popcnt" ]; then
+# The AVX2 baseline is an x86 statement. On aarch64 the archive is built for the
+# base ISA, where NEON is mandatory, so there is nothing to check and nothing
+# that can SIGILL for want of a feature.
+if [ "$WANT_ARCH" = "arm64" ]; then
+    info "cpu features: n/a on arm64 (NEON is mandatory in the base ISA)"
+elif [ "${RECKLESS_TARGET_FEATURES:-+avx2,+bmi2,+popcnt}" != "+avx2,+bmi2,+popcnt" ]; then
+    info "cpu features: baseline overridden (RECKLESS_TARGET_FEATURES=${RECKLESS_TARGET_FEATURES}) — check skipped"
+elif [ -r /proc/cpuinfo ]; then
     MISSING=""
     for feature in avx2 bmi2 popcnt; do
         grep -qw "$feature" /proc/cpuinfo || MISSING="$MISSING $feature"
@@ -131,8 +213,24 @@ if [ "${RECKLESS_TARGET_FEATURES:-+avx2,+bmi2,+popcnt}" = "+avx2,+bmi2,+popcnt" 
         exit 2
     fi
     info "cpu features: avx2 bmi2 popcnt present"
+elif command -v powershell.exe >/dev/null 2>&1; then
+    # Windows has no /proc/cpuinfo. .NET exposes the intrinsics query directly,
+    # and windows-latest ships it. Cheaper and more exact than parsing wmic.
+    AVX2_OK="$(powershell.exe -NoProfile -Command \
+        '[System.Runtime.Intrinsics.X86.Avx2]::IsSupported' 2>/dev/null | tr -d "\r\n ")"
+    case "$AVX2_OK" in
+        True) info "cpu features: AVX2 present (via System.Runtime.Intrinsics)" ;;
+        False)
+            echo "error: this CPU does not support AVX2." >&2
+            echo "       The archive is compiled Haswell-class with no runtime dispatch;" >&2
+            echo "       running it here would raise an illegal-instruction fault." >&2
+            exit 2 ;;
+        *)  warn "cpu features: could not query AVX2 support; an illegal-instruction"
+            warn "      fault in the searches below would mean this CPU lacks it" ;;
+    esac
 else
-    info "cpu features: baseline overridden (RECKLESS_TARGET_FEATURES=${RECKLESS_TARGET_FEATURES}) — check skipped"
+    warn "cpu features: no /proc/cpuinfo and no powershell to query; an"
+    warn "      illegal-instruction fault below would mean this CPU lacks AVX2"
 fi
 
 command -v swift >/dev/null 2>&1 || { echo "error: no swift on PATH" >&2; exit 2; }
@@ -194,24 +292,33 @@ fi
 # Always invoked. A warm cargo cache makes this fast, but it is never SKIPPED on
 # a cache hit — the point of the gate is the search that follows, and a cache
 # must never be able to shorten the path to a green result.
-say "Building the Rust archive (Tools/build-desktop.sh linux)"
+say "Building the Rust archive (Tools/build-desktop.sh $GATE_TARGET)"
 # Remove any pre-existing archive FIRST, so "it exists afterwards" means this
 # run produced it. Structural, not hygiene: it holds even if someone later
 # re-adds rust/target to a CI cache, or runs this on a dirty local tree where a
 # months-old archive is sitting in place. The gate must never qualify bytes it
 # did not build.
 rm -f "$ARCHIVE"
-bash Tools/build-desktop.sh linux
+bash Tools/build-desktop.sh "$GATE_TARGET"
 
 [ -f "$ARCHIVE" ] || { echo "error: archive not produced at $ARCHIVE" >&2; exit 1; }
 ARCHIVE_BYTES="$(size_of "$ARCHIVE")"
 ARCHIVE_SHA="$(sha256_of "$ARCHIVE")"
 
-say "Archive vs the 2026-08-10 proof"
-info "path:     $ARCHIVE"
-info "bytes:    $ARCHIVE_BYTES  (recorded $RECORDED_ARCHIVE_BYTES)"
-info "sha256:   $ARCHIVE_SHA"
-info "recorded: $RECORDED_ARCHIVE_SHA"
+if [ -n "$RECORDED_ARCHIVE_SHA" ]; then
+    say "Archive vs the 2026-08-10 proof"
+    info "path:     $ARCHIVE"
+    info "bytes:    $ARCHIVE_BYTES  (recorded $RECORDED_ARCHIVE_BYTES)"
+    info "sha256:   $ARCHIVE_SHA"
+    info "recorded: $RECORDED_ARCHIVE_SHA"
+else
+    say "Archive (no recorded proof for $GATE_TARGET yet)"
+    info "path:   $ARCHIVE"
+    info "bytes:  $ARCHIVE_BYTES"
+    info "sha256: $ARCHIVE_SHA"
+    info "This target has no recorded baseline. The first green run establishes"
+    info "one; the searches below are the assertion either way."
+fi
 
 # Hard: it exists and is plausibly an engine. Advisory: it is byte-identical.
 if [ "$ARCHIVE_BYTES" -lt 5000000 ]; then
@@ -219,7 +326,9 @@ if [ "$ARCHIVE_BYTES" -lt 5000000 ]; then
 else
     pass "archive size is plausible ($ARCHIVE_BYTES bytes)"
 fi
-if [ "$ARCHIVE_SHA" = "$RECORDED_ARCHIVE_SHA" ]; then
+if [ -z "$RECORDED_ARCHIVE_SHA" ]; then
+    info "no recorded sha for this target — nothing to compare"
+elif [ "$ARCHIVE_SHA" = "$RECORDED_ARCHIVE_SHA" ]; then
     pass "archive is byte-identical to the recorded proof"
 else
     warn "archive differs from the recorded proof (advisory: a rustc patch bump or a"
@@ -246,25 +355,43 @@ mkdir -p "$LOG_DIR"
 # cached across CI runs anyway.
 rm -rf "$STUB_SCRATCH" "$REAL_SCRATCH"
 
+# HOW THE REAL ARM IS TOLD WHERE THE ARCHIVE IS. On Linux, LIBRARY_PATH. On
+# Windows, `-Xlinker /LIBPATH:` and specifically NOT the LIB environment
+# variable: Tools/build-desktop.sh records why, and it is not a style choice —
+# defining LIB outside a Visual Studio developer prompt stops clang
+# auto-detecting the MSVC and Windows SDK library directories, and the link then
+# fails on msvcrt.lib / oldnames.lib / msvcprt.lib.
+REAL_ENV=(SWIFTRECKLESS_LINK_ARCHIVE=1)
+REAL_ARGS=()
+if [ "$WANT_OS" = "Windows" ]; then
+    REAL_ARGS=(-Xlinker "/LIBPATH:$ARCHIVE_DIR")
+    SEARCH_DESC="-Xlinker /LIBPATH:$ARCHIVE_DIR"
+else
+    REAL_ENV+=("LIBRARY_PATH=$ARCHIVE_DIR")
+    SEARCH_DESC="LIBRARY_PATH=$ARCHIVE_DIR"
+fi
+
 say "Arm 1 of 2 — STUB (negative control, no opt-in, no linker search path)"
 # `env -u` rather than merely not setting them: if the caller's environment
 # already had these exported, the negative control would quietly become a second
-# real arm and the gate would assert nothing.
-env -u SWIFTRECKLESS_LINK_ARCHIVE -u LIBRARY_PATH \
+# real arm and the gate would assert nothing. LIB is unset too, so a developer
+# running this from a Visual Studio prompt that happens to name the archive
+# directory cannot turn the control into a second real arm either.
+env -u SWIFTRECKLESS_LINK_ARCHIVE -u LIBRARY_PATH -u LIB \
     swift build -c release --product reckless-known-answer \
         --scratch-path "$STUB_SCRATCH" --manifest-cache none
-STUB_BIN="$(env -u SWIFTRECKLESS_LINK_ARCHIVE -u LIBRARY_PATH \
+STUB_BIN="$(env -u SWIFTRECKLESS_LINK_ARCHIVE -u LIBRARY_PATH -u LIB \
     swift build -c release --scratch-path "$STUB_SCRATCH" --manifest-cache none \
-    --show-bin-path)/reckless-known-answer"
+    --show-bin-path)/reckless-known-answer$EXE_SUFFIX"
 info "stub binary: $STUB_BIN"
 
-say "Arm 2 of 2 — REAL (SWIFTRECKLESS_LINK_ARCHIVE=1, archive on LIBRARY_PATH)"
-SWIFTRECKLESS_LINK_ARCHIVE=1 LIBRARY_PATH="$ARCHIVE_DIR" \
+say "Arm 2 of 2 — REAL (SWIFTRECKLESS_LINK_ARCHIVE=1, $SEARCH_DESC)"
+env "${REAL_ENV[@]}" \
     swift build -c release --product reckless-known-answer \
-        --scratch-path "$REAL_SCRATCH" --manifest-cache none
-REAL_BIN="$(SWIFTRECKLESS_LINK_ARCHIVE=1 LIBRARY_PATH="$ARCHIVE_DIR" \
+        --scratch-path "$REAL_SCRATCH" --manifest-cache none "${REAL_ARGS[@]+"${REAL_ARGS[@]}"}"
+REAL_BIN="$(env "${REAL_ENV[@]}" \
     swift build -c release --scratch-path "$REAL_SCRATCH" --manifest-cache none \
-    --show-bin-path)/reckless-known-answer"
+    "${REAL_ARGS[@]+"${REAL_ARGS[@]}"}" --show-bin-path)/reckless-known-answer$EXE_SUFFIX"
 info "real binary: $REAL_BIN"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,7 +461,11 @@ info "engine version string — real binary: $REAL_HITS hit(s), stub binary: $ST
 REAL_BYTES="$(size_of "$REAL_BIN")"
 STUB_BYTES="$(size_of "$STUB_BIN")"
 DELTA=$((REAL_BYTES - STUB_BYTES))
-info "real $REAL_BYTES bytes (recorded $RECORDED_REAL_BYTES), stub $STUB_BYTES bytes (recorded $RECORDED_STUB_BYTES), delta $DELTA"
+if [ "$RECORDED_REAL_BYTES" -gt 0 ]; then
+    info "real $REAL_BYTES bytes (recorded $RECORDED_REAL_BYTES), stub $STUB_BYTES bytes (recorded $RECORDED_STUB_BYTES), delta $DELTA"
+else
+    info "real $REAL_BYTES bytes, stub $STUB_BYTES bytes, delta $DELTA (no recorded baseline for $GATE_TARGET)"
+fi
 # Floor well under the recorded 5,735,360 so engine growth or a Swift runtime
 # change cannot trip it, but far above any plausible noise.
 [ "$DELTA" -gt 3000000 ] \
@@ -347,7 +478,7 @@ info "real $REAL_BYTES bytes (recorded $RECORDED_REAL_BYTES), stub $STUB_BYTES b
 say "Verdict"
 if [ "$FAILURES" -eq 0 ]; then
     info "Logs: $STUB_LOG, $REAL_LOG"
-    printf '\n\033[1;32mPASS\033[0m — the desktop archive links AND plays chess, and the\n'
+    printf '\n\033[1;32mPASS\033[0m — the %s archive links AND plays chess, and the\n' "$GATE_TARGET"
     printf '       no-opt-in build from the same tree refuses to.\n\n'
     exit 0
 else
