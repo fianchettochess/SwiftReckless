@@ -1,0 +1,23 @@
+# NO LINE-ENDING CONVERSION, AND THIS PACKAGE SHIPS BINARIES.
+#
+# `Frameworks/RecklessFFI.xcframework` tracks `libcreckless.a` for every Apple
+# slice directly in git, alongside its headers. Git's binary heuristic usually
+# spares an archive, because it looks for a NUL byte in the first 8000; that is
+# a heuristic, and the difference between a real engine archive and a corrupt
+# one is the difference this package exists to keep honest.
+#
+# MEASURED on FianchettoKit's Windows CI, 2026-09-01 (run 33480101316), before
+# any of these files existed. GitHub's windows-latest runners set
+# `core.autocrlf=true` globally, so `actions/checkout` rewrote every LF to CRLF
+# and eleven of fourteen test failures were that one cause. Each corrupted
+# fixture had grown by exactly its own newline count, and one of them was a
+# BINARY ML fixture that gained a byte and lost its SHA-256.
+#
+# `.gitattributes` overrides `core.autocrlf`, travels with the repository, and
+# applies to every consumer — so a developer cloning on Windows gets the same
+# bytes CI does. Configuring CI alone would have fixed CI alone.
+#
+# `* -text` rather than a per-extension list on purpose: the default has to be
+# "do not touch", because the next byte-sensitive file will be added by someone
+# who has never read this file.
+* -text

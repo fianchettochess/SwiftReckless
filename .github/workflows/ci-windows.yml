@@ -1,0 +1,124 @@
+name: SwiftReckless — CI (Windows gate)
+
+# WHY THIS EXISTS.
+# The source arm links link-compatible NO-OP `rk_ffi_*` stubs unless a build opts in with
+# SWIFTRECKLESS_LINK_ARCHIVE=1 and supplies a real archive. This job supplies none, so it MUST link
+# stubs — and says so, exactly as the Linux source-stub job does. Without the declaration a stub link
+# and a real link are indistinguishable from a green run, and a silently stubbed engine is the
+# failure this package is built to make impossible.
+#
+# What this proves on Windows specifically: the package compiles and LINKS there, and the honest
+# refusal reports honestly. The real-archive gate needs a Rust x86_64-pc-windows-msvc build of
+# creckless, which has never been done — it mirrors ci-desktop-archive.yml and is separate work.
+#
+# Companion to the Linux gate, not a replacement. Windows runners cost about
+# twice a Linux minute and the owner has accepted that; the alternative is a
+# platform claimed in a README and measured nowhere, which is how FianchettoKit
+# carried three unresolved Windows failures for a month across 291 commits.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: SwiftReckless — Windows gate / tests (Swift 6.3.3, x86_64-msvc)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      # Before any checkout. Windows runners set core.autocrlf=true globally, and
+      # this package tracks files whose BYTES matter. `.gitattributes` is the
+      # durable fix and lands with this change; this covers any repository the
+      # job clones, including ones added later.
+      - name: Never convert line endings, in any checkout
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 6.3.3 is current and is the toolchain the Fianchetto stack's Windows
+      # results were measured on. The Linux jobs deliberately pin the package's
+      # declared MINIMUM to prove the floor still builds; this job is about
+      # platform coverage, so it takes the ceiling. Pin the floor here only if
+      # this becomes noise, never the ceiling — a consumer on Windows is ahead,
+      # not behind.
+      - name: Install Swift toolchain
+        uses: compnerd/gha-setup-swift@main
+        with:
+          branch: swift-6.3.3-release
+          tag: 6.3.3-RELEASE
+
+      # Neither arrives on PATH by itself, measured on FianchettoKit CI
+      # 2026-09-01: the installer runs elevated as SYSTEM while Swift installs
+      # per-user, so the action's Machine/User PATH refresh misses the toolchain
+      # bin; and mt.exe ships with the Windows SDK but only a Visual Studio
+      # developer shell puts its directory on PATH.
+      - name: Put the Swift toolchain and Windows SDK on PATH
+        shell: pwsh
+        run: |
+          $roots = @(
+            (Join-Path $env:USERPROFILE "AppData\Local\Programs\Swift"),
+            "C:\Program Files\Swift"
+          ) | Where-Object { Test-Path $_ }
+          if (-not $roots) {
+            Write-Host "::error::No Swift installation root found."
+            exit 1
+          }
+          $swift = $roots | ForEach-Object {
+            Get-ChildItem $_ -Recurse -Filter swift.exe -ErrorAction SilentlyContinue
+          } | Select-Object -First 1
+          if (-not $swift) {
+            Write-Host "::error::Swift installed but swift.exe was not found under: $($roots -join '; ')"
+            exit 1
+          }
+          Write-Host "swift.exe: $($swift.FullName)"
+          Add-Content -Path $env:GITHUB_PATH -Value $swift.DirectoryName
+          foreach ($root in $roots) {
+            Get-ChildItem (Join-Path $root "Runtimes") -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+              $rt = Join-Path $_.FullName "usr\bin"
+              if (Test-Path $rt) { Add-Content -Path $env:GITHUB_PATH -Value $rt }
+            }
+          }
+          if (-not (Get-Command mt.exe -ErrorAction SilentlyContinue)) {
+            $bin = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory -ErrorAction SilentlyContinue |
+                     Where-Object { Test-Path (Join-Path $_.FullName "x64\mt.exe") } |
+                     Sort-Object Name -Descending | Select-Object -First 1
+            if ($bin) { Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $bin.FullName "x64") }
+          }
+
+      - name: Verify the toolchain answers
+        shell: pwsh
+        run: |
+          swift --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::swift --version exited $LASTEXITCODE after PATH setup."
+            exit 1
+          }
+
+      # `.build` nests deeply on Windows and MAX_PATH is 260. This is the
+      # machine half of the long-path pair; on a hosted runner we own the
+      # machine, so we set it.
+      - name: Enable long paths
+        shell: pwsh
+        run: |
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+          git config --system core.longpaths true
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        env:
+          SWIFTRECKLESS_EXPECT_BACKEND: stub
+        run: swift test
