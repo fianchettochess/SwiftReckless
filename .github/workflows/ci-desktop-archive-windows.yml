@@ -239,6 +239,21 @@ jobs:
       - name: Build the archive, build both arms, assert the margin
         run: bash Tools/verify-desktop-gate.sh ${{ matrix.target }}
 
+      # THE SECOND QUESTION, and the one the artifactbundle exists to answer.
+      # The step above proves the OPT-IN path links a real engine. This proves a
+      # real engine is now the DEFAULT: it builds the bundle, then builds with
+      # SWIFTRECKLESS_LINK_ARCHIVE and every search-path variable explicitly
+      # unset, and asserts SwiftPM reported "Copying creckless.lib" before
+      # asserting the binary plays chess.
+      #
+      # That first assertion is the load-bearing one. A supportedTriples
+      # mismatch is skipped with no diagnostic, so a bundle can be present,
+      # well-formed and silently ignored — cargo says `pc` where SwiftPM matches
+      # `unknown`. Checking SwiftPM's own "Copying" line fails at the cause
+      # rather than at a symptom two layers down.
+      - name: Prove the bundle makes a real engine the DEFAULT
+        run: bash Tools/verify-windows-bundle.sh
+
       # The logs are the evidence for a first-ever run, and this is the first
       # time either architecture has been asked to play chess on Windows.
       - name: Upload both arms' logs

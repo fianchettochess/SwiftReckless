@@ -52,6 +52,7 @@
 // newer); Reckless selects SIMD at compile time and does not runtime-dispatch.
 
 import PackageDescription
+import Foundation
 
 // ── Platform detection ────────────────────────────────────────────────────────
 // Same dual-arm logic as SwiftStockfish: Apple hosts use the prebuilt
@@ -69,6 +70,41 @@ let hostIsApple = false
 //     an aarch64-linux-android `libcreckless.a` link input;
 //   * a from-source macOS dev build via CLI `swift build`.
 let forceSource = Context.environment["SWIFTRECKLESS_FORCE_SOURCE_BUILD"] == "1"
+
+#if os(Windows)
+let hostIsWindows = true
+#else
+let hostIsWindows = false
+#endif
+
+// ── The Windows binary arm ────────────────────────────────────────────────────
+//
+// Windows gets the same deal Apple gets — a prebuilt engine from a plain
+// `swift build`, no opt-in, no Rust toolchain — through an SE-0482
+// `staticLibrary` artifact bundle. `.xcframework` cannot carry a Windows slice
+// (SwiftPM maps Windows triples to nil when matching xcframework platforms), so
+// this is a second artifact in a different format rather than an eleventh slice.
+//
+// PRESENCE IS THE SWITCH, because unlike the xcframework this bundle is NOT
+// committed: it is a release artifact, built by
+// Tools/build-windows-artifactbundle.sh and attached to the tag. A clone
+// without it behaves exactly as this package did before the bundle existed —
+// the source arm, stubs unless SWIFTRECKLESS_LINK_ARCHIVE=1 — so absence is a
+// supported state rather than a broken one, and no Windows developer is forced
+// to acquire a Rust toolchain to get a build.
+let windowsBundlePath = "Frameworks/RecklessWindowsFFI.artifactbundle"
+let windowsBundlePresent = FileManager.default.fileExists(
+    atPath: Context.packageDirectory + "/" + windowsBundlePath + "/info.json"
+)
+
+// Flipped to `true` by the release rewrite, alongside a `url:`+`checksum:`
+// binaryTarget — where nothing exists on disk to check for. Kept as a named
+// constant rather than folded into the condition so the rewrite has one
+// unambiguous line to find.
+let windowsBinaryIsRemote = false
+
+let useWindowsBinaryEngine =
+    hostIsWindows && !forceSource && (windowsBinaryIsRemote || windowsBundlePresent)
 
 // HARDENING (learned the hard way — see the "not a mach-o file" incident): if
 // SWIFTRECKLESS_FORCE_SOURCE_BUILD ever leaks into the *Xcode GUI* environment
@@ -151,6 +187,59 @@ if useBinaryEngine {
             cSettings: [
                 // The bridge includes "RecklessBridge.h" via the public header.
                 .headerSearchPath("."),
+            ]
+        ),
+    ]
+} else if useWindowsBinaryEngine {
+    // WINDOWS BINARY PATH. Structurally the Apple arm, and deliberately so.
+    //
+    // THE STUBS ARE NOT COMPILED HERE, and that is the load-bearing line rather
+    // than an optimisation. A `supportedTriples` mismatch in the bundle is
+    // skipped by SwiftPM with NO diagnostic — measured 2026-09-01 against a
+    // throwaway package: the build proceeds and fails at the link with
+    // undefined symbols, never naming the bundle or the triple. That is a fine
+    // failure, because it is loud. But RecklessHostStubs.c defines
+    // link-compatible no-op rk_ffi_*, so if this arm compiled the stubs the
+    // very same mismatch would link CLEANLY against no-ops and ship a dead
+    // engine reporting itself healthy. Omitting them converts the silent
+    // failure into an undefined-symbol error.
+    //
+    // RECKLESS_SOURCE_ARM IS ALSO NOT DEFINED, for the same reason the Apple arm
+    // does not define it: RecklessBackend.h reads
+    // `RECKLESS_SOURCE_ARM && !RECKLESS_LINK_ARCHIVE` as "stub", so a binary arm
+    // that stayed silent about itself would report `.stub` while running a real
+    // engine. One condition, evaluated once, used twice — the header says so.
+    engineTargets = [
+        .binaryTarget(
+            name: "RecklessWindowsFFI",
+            // NOT committed. Built by Tools/build-windows-artifactbundle.sh and
+            // attached to the tagged release; the release rewrite replaces this
+            // with `url:` + `checksum:` and flips windowsBinaryIsRemote.
+            path: windowsBundlePath
+        ),
+        .target(
+            name: "CReckless",
+            dependencies: ["RecklessWindowsFFI"],
+            path: "Sources/CReckless",
+            // The thin C bridge only. The engine is in the bundle, and
+            // RecklessBridge.c forward-declares every rk_ffi_* it calls.
+            sources: ["RecklessBridge.c"],
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("."),
+                .define("NDEBUG", .when(configuration: .release)),
+            ],
+            // The Rust staticlib's own native dependencies, transcribed from
+            // `rustc --print native-static-libs` for x86_64-pc-windows-msvc.
+            // Safe settings, so they survive version-pinning. msvcrt is MSVC's
+            // default lib and is not repeated.
+            linkerSettings: [
+                .linkedLibrary("kernel32", .when(platforms: [.windows])),
+                .linkedLibrary("ntdll", .when(platforms: [.windows])),
+                .linkedLibrary("userenv", .when(platforms: [.windows])),
+                .linkedLibrary("ws2_32", .when(platforms: [.windows])),
+                .linkedLibrary("dbghelp", .when(platforms: [.windows])),
+                .linkedLibrary("legacy_stdio_definitions", .when(platforms: [.windows])),
             ]
         ),
     ]
