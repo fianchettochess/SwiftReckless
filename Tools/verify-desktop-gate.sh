@@ -72,9 +72,21 @@
 #
 # AGPL: this builds the AGPL-3.0 engine fork from the tag pinned in
 # rust/Cargo.lock, via Tools/build-desktop.sh with cargo's `--locked`. Do not
-# vendor engine source and do not re-pin here. The archive it produces is an
-# AGPL-derived artifact: passing it between CI jobs is fine, publishing it as a
-# release asset is not.
+# vendor engine source and do not re-pin here.
+#
+# NARROWED 2026-09-01, because the previous wording read wider than it meant.
+# It said "publishing it as a release asset is not [fine]", which sounds like a
+# licence claim and is not one — release.yml already publishes
+# RecklessFFI.xcframework.zip, which contains libcreckless.a for every Apple
+# slice, under these same terms. The intent is a SCOPE claim about THIS JOB,
+# stated plainly in the commit that introduced it: the archive never leaves the
+# job — no artifact upload, no release attachment.
+#
+# The reason is provenance rather than licensing. An archive built ad hoc by a
+# gate has not been through the release flow's version validation, checksum, or
+# detached release commit, so publishing THIS one would convey bytes nobody can
+# trace to a tag. A release-flow-built archive is a different artifact and is
+# published already.
 
 set -euo pipefail
 

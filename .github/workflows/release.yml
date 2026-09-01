@@ -255,6 +255,48 @@ jobs:
           CHECKSUM: ${{ steps.checksum.outputs.checksum }}
           REPO: ${{ github.repository }}
         run: |
+          # KNOWN, RECORDED 2026-09-01: THE MANIFEST THIS PRODUCES CANNOT BE
+          # RESOLVED WHILE THIS REPOSITORY IS PRIVATE. Not a defect in the
+          # rewrite — a property of the endpoint it points at.
+          #
+          # MEASURED against the real 0.9.11 asset:
+          #
+          #   https://github.com/<owner>/<repo>/releases/download/0.9.11/RecklessFFI.xcframework.zip
+          #     no auth            -> 404
+          #     Authorization: Bearer <token>  -> 404
+          #     Authorization: token  <token>  -> 404
+          #     Basic x-access-token:<token>   -> 404
+          #
+          #   https://api.github.com/repos/<owner>/<repo>/releases/assets/509577665
+          #     Basic x-access-token:<token>   -> 200 (302 -> real ZIP bytes)
+          #
+          # SwiftPM CAN authenticate binary downloads — it reads ~/.netrc and
+          # says so ("credentials for https://github.com/... found in netrc
+          # file") — but GitHub serves private release assets only from the API
+          # endpoint, and that URL has no `.zip` path extension, which SwiftPM
+          # rejects at manifest validation
+          # (supportedRemoteBinaryDependencyExtensions = ["artifactbundleindex",
+          # "zip"]). So `swift package resolve` fails badResponseStatusCode(404)
+          # with and without credentials.
+          #
+          # WHY NOBODY HAS HIT IT. No consumer references this package by
+          # version: Fianchetto.xcodeproj uses XCLocalSwiftPackageReference
+          # "../SwiftReckless", and fianchetto-cmp uses
+          # `.package(path: recklessCheckout)`. They all link the COMMITTED
+          # xcframework from a sibling checkout. And the "versioned remote
+          # consumer" step earlier in this workflow runs BEFORE this rewrite, so
+          # it exercises the path manifest rather than the one that ships.
+          #
+          # WHEN THIS REPOSITORY GOES PUBLIC, releases/download/ starts serving
+          # and this becomes real. Verify it then rather than assuming:
+          #
+          #   swift package resolve   # against the tagged version, from a clean
+          #                           # clone with no sibling checkouts present
+          #
+          # and move the versioned-consumer test to AFTER the rewrite so it
+          # tests what is shipped. Only then is the committed xcframework
+          # redundant; removing it before that breaks the Apple app's build,
+          # which links it from the sibling path.
           set -euo pipefail
           git checkout --detach
           python3 .github/scripts/rewrite_binary_target.py \
