@@ -53,7 +53,23 @@ jobs:
       # platform coverage, so it takes the ceiling. Pin the floor here only if
       # this becomes noise, never the ceiling — a consumer on Windows is ahead,
       # not behind.
+      # continue-on-error IS NOT a weakened gate here, and the reason matters.
+      # This action ends with its own `swift --version` check, which races its
+      # own PATH refresh: the installer runs elevated as SYSTEM while Swift 6.3.3
+      # installs per-user, so whether the toolchain bin has reached the Machine
+      # or User environment block by the time the action looks is a coin toss.
+      # MEASURED 2026-09-01: the identical workflow, action and inputs passed for
+      # SwiftStockfish (run 33501874741) and failed for BoardKit (33501851591)
+      # minutes apart, both with "The term 'swift' is not recognized".
+      #
+      # We fix PATH ourselves in the very next step and verify it in the one
+      # after, so the authoritative signal moves from the action's racy internal
+      # check to our own deterministic one. A genuine install failure still fails
+      # the job — twice: the PATH step errors when swift.exe is nowhere under
+      # either installation root, and the verify step errors when swift cannot
+      # answer.
       - name: Install Swift toolchain
+        continue-on-error: true
         uses: compnerd/gha-setup-swift@main
         with:
           branch: swift-6.3.3-release
