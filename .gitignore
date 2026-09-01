@@ -37,5 +37,18 @@ networks/
 # commit the result. (No NNUE net is baked in; it loads at runtime from
 # rust/networks/.)
 
+# THE WINDOWS BUNDLE IS NOT COMMITTED, and that is the deliberate difference
+# from the xcframework above. It is a release artifact: built by
+# Tools/build-windows-artifactbundle.sh, attached to the tagged release, and
+# reached by consumers through the url:+checksum: binaryTarget the release
+# rewrite installs. Two 13 MB archives per engine bump is not a thing to add to
+# git history when a release asset carries them just as well.
+#
+# Package.swift takes the Windows binary arm only when this bundle is PRESENT,
+# so a clone without it behaves exactly as this package did before the bundle
+# existed — the source arm, stubs unless SWIFTRECKLESS_LINK_ARCHIVE=1. Absence
+# is a supported state, not a broken one.
+Frameworks/RecklessWindowsFFI.artifactbundle/
+
 # SwiftPM scratch/build dirs (incl. isolated --scratch-path)
 .build*/
