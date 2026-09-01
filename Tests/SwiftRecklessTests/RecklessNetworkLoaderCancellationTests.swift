@@ -32,11 +32,9 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
-#if canImport(CryptoKit)
-import CryptoKit
-#else
-import Crypto
-#endif
+// SHA-256 for the fixture hashing assertion lives in TestSHA256.swift, which
+// mirrors the loader's seam. swift-crypto was dropped from this package (see
+// Package.swift); importing `Crypto` here is what broke the non-Apple build.
 @testable import SwiftReckless
 
 @Suite("RecklessNetworkLoader cancellation (hermetic)")
@@ -145,7 +143,7 @@ struct RecklessNetworkLoaderCancellationTests {
     @Test("a stubbed successful download stages, verifies, installs, and removes the .part staging file")
     func successfulDownloadInstallsAndCleansStaging() async throws {
         let content = Data("swiftreckless-hermetic-download-fixture".utf8)
-        let sha = SHA256.hash(data: content).map { String(format: "%02x", $0) }.joined()
+        let sha = sha256Hex(content)
         let net = RecklessNetworkLoader.Network(
             filename: "v54-\(String(sha.prefix(8))).nnue",
             sha256: sha,
