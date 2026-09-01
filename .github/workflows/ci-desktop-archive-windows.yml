@@ -1,0 +1,251 @@
+name: SwiftReckless — desktop real-archive gate (Windows)
+
+# THE WINDOWS HALF OF THE REAL-ARCHIVE GATE, AND IT HAS NEVER EXISTED.
+#
+# Tools/verify-desktop-gate.sh hardcoded x86_64-unknown-linux-gnu and refused
+# every other host in its preconditions, and ci-desktop-archive.yml runs only on
+# ubuntu-latest. So there was no Windows gate for EITHER architecture — which
+# made "ARM64 cannot be verified" look like a separate problem when it was the
+# same one. Nothing in this repository had ever run a Reckless search on Windows.
+#
+# fetch-desktop-models.ps1 states the position plainly: the Windows archive "has
+# NEVER been built or run as of 2026-08-10". This job is what changes the second
+# half of that sentence.
+#
+# WHY IT MATTERS MORE HERE THAN ON LINUX. Sources/CReckless/RecklessHostStubs.c
+# satisfies every rk_ffi_* symbol with link-compatible no-ops, so on Windows the
+# package links and reports success today while containing no engine at all —
+# .github/workflows/ci-windows.yml encodes exactly that state with
+# SWIFTRECKLESS_EXPECT_BACKEND: stub. "It linked" and "it plays chess" are
+# different claims everywhere, and on Windows only the first has ever been made.
+#
+# THE SCRIPT IS THE GATE; THIS FILE IS A RUNNER. Everything asserted here is
+# asserted by Tools/verify-desktop-gate.sh, which a developer runs unchanged:
+#
+#     bash Tools/verify-desktop-gate.sh windows
+#     bash Tools/verify-desktop-gate.sh windows-arm64
+#
+# There is no CI-only logic, deliberately — a red gate nobody can reproduce gets
+# deleted rather than fixed.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: &gate_paths
+      - 'rust/**'
+      - 'Sources/CReckless/**'
+      - 'Sources/SwiftReckless/**'
+      - 'Sources/reckless-known-answer/**'
+      - 'Package.swift'
+      - 'rust-toolchain.toml'
+      - 'Tools/build-desktop.sh'
+      - 'Tools/verify-desktop-gate.sh'
+      - '.github/workflows/ci-desktop-archive-windows.yml'
+  # Paths-filtered for the same reason the Linux gate is: this repo is private,
+  # hosted minutes are billed, and Windows minutes are billed at twice Linux.
+  # The filter is every input that can change what gets linked or how it behaves.
+  pull_request:
+    paths: *gate_paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-archive-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-archive-gate:
+    name: Real archive plays chess (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      # fail-fast: false because the two architectures answer different
+      # questions and one must not hide the other. x86_64 is the proven path;
+      # arm64 is the one nobody has run.
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86_64
+            runner: windows-latest
+            target: windows
+            build_arch: amd64
+          # ARM64. The archive already cross-builds — both creckless.lib files
+          # are produced from a macOS host in about fifteen seconds each, and
+          # both carry all four rk_ffi_* symbols — so what has never happened is
+          # RUNNING one. `windows-11-arm` is generally available; on a private
+          # repository it is billed rather than free, which is the cost this
+          # entry buys the answer with.
+          #
+          # Deliberately NOT run under emulation on the x86_64 runner: an x64
+          # binary does execute under Prism, so a gate that allowed it would
+          # silently measure the emulator and report the wrong thing green. The
+          # script refuses that arrangement in its host precondition.
+          - name: Windows ARM64
+            runner: windows-11-arm
+            target: windows-arm64
+            build_arch: arm64
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      # Byte-exactness first, before any checkout. This repository does not
+      # currently carry fixtures whose bytes are asserted, but the archive's
+      # sha256 is reported against a recorded proof and the sibling packages all
+      # learned this the same way on 2026-09-01.
+      - name: Never convert line endings
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 6.3.3 matches the environment the Linux proof was measured in
+      # (swift:6.3.3-noble), so a failure here means the ENGINE changed rather
+      # than the SDK — the same reasoning ci-desktop-archive.yml gives for
+      # pinning its container.
+      #
+      # continue-on-error is not a weakened gate: this action ends with its own
+      # `swift --version` check that races its own PATH refresh, measured failing
+      # for one repository and passing for another minutes apart on 2026-09-01.
+      # The authoritative check is ours, two steps below, and it runs after we
+      # set PATH deterministically.
+      - name: Install Swift toolchain
+        continue-on-error: true
+        uses: compnerd/gha-setup-swift@main
+        with:
+          branch: swift-6.3.3-release
+          tag: 6.3.3-RELEASE
+          build_arch: ${{ matrix.build_arch }}
+
+      # The installer has been measured exiting 0 without laying down the
+      # toolchain (SwiftReckless run 33502501719). One verified retry.
+      - name: Reinstall Swift if the toolchain is incomplete
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:USERPROFILE "AppData\Local\Programs\Swift"
+          $found = if (Test-Path $root) {
+            Get-ChildItem $root -Recurse -Filter swift.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          } else { $null }
+          if ($found) { Write-Host "Toolchain present: $($found.FullName)"; exit 0 }
+          Write-Host "::warning::swift.exe absent after an install that reported success. Retrying once."
+          $arch = if ("${{ matrix.build_arch }}" -eq "arm64") { "arm64" } else { "" }
+          $name = if ($arch) { "swift-6.3.3-RELEASE-windows10-arm64.exe" } else { "swift-6.3.3-RELEASE-windows10.exe" }
+          $url  = "https://download.swift.org/swift-6.3.3-release/windows10$(if($arch){'-arm64'})/swift-6.3.3-RELEASE/$name"
+          $exe  = Join-Path $env:TEMP "swift-retry.exe"
+          Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
+          $p = Start-Process -FilePath $exe -ArgumentList "/quiet" -Wait -PassThru
+          Write-Host "installer exit code: $($p.ExitCode)"
+          $found = if (Test-Path $root) {
+            Get-ChildItem $root -Recurse -Filter swift.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          } else { $null }
+          if (-not $found) {
+            Write-Host "::error::swift.exe still absent after a retry. Installer failure, not a package failure."
+            exit 1
+          }
+          Write-Host "Toolchain present after retry: $($found.FullName)"
+
+      # Neither the toolchain nor the SDK arrives on PATH by itself: the
+      # installer runs elevated as SYSTEM while Swift installs per-user, so the
+      # action's Machine/User PATH refresh misses the toolchain bin.
+      - name: Put the Swift toolchain on PATH
+        shell: pwsh
+        run: |
+          $roots = @(
+            (Join-Path $env:USERPROFILE "AppData\Local\Programs\Swift"),
+            "C:\Program Files\Swift"
+          ) | Where-Object { Test-Path $_ }
+          if (-not $roots) { Write-Host "::error::No Swift installation root found."; exit 1 }
+          $swift = $roots | ForEach-Object {
+            Get-ChildItem $_ -Recurse -Filter swift.exe -ErrorAction SilentlyContinue
+          } | Select-Object -First 1
+          if (-not $swift) {
+            Write-Host "::error::Swift installed but swift.exe was not found under: $($roots -join '; ')"
+            exit 1
+          }
+          Write-Host "swift.exe: $($swift.FullName)"
+          Add-Content -Path $env:GITHUB_PATH -Value $swift.DirectoryName
+          foreach ($root in $roots) {
+            Get-ChildItem (Join-Path $root "Runtimes") -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+              $rt = Join-Path $_.FullName "usr\bin"
+              if (Test-Path $rt) { Add-Content -Path $env:GITHUB_PATH -Value $rt }
+            }
+          }
+
+      - name: Verify the toolchain answers
+        shell: pwsh
+        run: |
+          swift --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::swift --version exited $LASTEXITCODE after PATH setup."
+            exit 1
+          }
+
+      # `.build` and the cargo target directory both nest deeply, and MAX_PATH
+      # is 260.
+      - name: Enable long paths
+        shell: pwsh
+        run: |
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+          git config --system core.longpaths true
+
+      # Keyed the same way the Linux gate keys its cache, with the runner
+      # architecture added: an x86_64 and an arm64 toolchain must never share an
+      # entry. rust/target is deliberately NOT cached — the gate must never
+      # qualify an archive it did not build, and the crate compile is seconds.
+      - name: Cache cargo registry, git checkouts and toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup
+          key: reckless-desktop-${{ runner.os }}-${{ runner.arch }}-swift633-${{ hashFiles('rust-toolchain.toml', 'rust/Cargo.lock', 'Tools/build-desktop.sh') }}
+          restore-keys: |
+            reckless-desktop-${{ runner.os }}-${{ runner.arch }}-swift633-
+
+      # The net is ~60 MB and immutable; its SHA-256 is the cache key, so a hit
+      # is always the right file. The gate re-verifies the checksum regardless,
+      # because a cache is an untrusted input.
+      - name: Cache NNUE network
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: rust/networks
+          key: reckless-nnue-5478683cb1bababde29ae8f29468a99846726548fc6a0ed54cac40ab6d38efbf
+
+      # --default-toolchain none: rust-toolchain.toml is the single source of
+      # truth, and verify-desktop-gate.sh reads the channel out of it. The
+      # hosted Windows images ship a rustup already; installing a default here
+      # would put a second, floating toolchain on the box.
+      - name: Install rustup (toolchain comes from rust-toolchain.toml)
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
+            echo "${USERPROFILE}\\.cargo\\bin" >> "${GITHUB_PATH}"
+          else
+            echo "rustup already present: $(rustup --version)"
+          fi
+
+      # Everything that constitutes the gate. Builds the archive for this
+      # target, builds BOTH arms from this one tree into separate scratch paths,
+      # runs both, and asserts the margin between them. Identical to what a
+      # developer runs locally.
+      - name: Build the archive, build both arms, assert the margin
+        run: bash Tools/verify-desktop-gate.sh ${{ matrix.target }}
+
+      # The logs are the evidence for a first-ever run, and this is the first
+      # time either architecture has been asked to play chess on Windows.
+      - name: Upload both arms' logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reckless-windows-gate-${{ matrix.target }}
+          path: .build-gate-logs/
+          if-no-files-found: warn
+          retention-days: 14
