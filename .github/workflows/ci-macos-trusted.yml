@@ -85,10 +85,37 @@ jobs:
       - name: Test source-stub package path
         # The NNUE-guarded live engine smoke test skips cleanly when the
         # net file is absent (gitignored). All other tests run normally.
+        #
+        # SWIFTRECKLESS_FORCE_SOURCE_BUILD=1 is set on the job, so Package.swift
+        # takes the source arm, CReckless compiles RecklessHostStubs.c, and
+        # RecklessBackend.h reports `stub`. Declaring that is what makes the
+        # forcing observable: until now this step named no expectation, so the
+        # contract test "linked backend matches SWIFTRECKLESS_EXPECT_BACKEND"
+        # recorded a skip and the job could not tell "forced the source arm"
+        # from "the force flag stopped working and we tested the XCFramework
+        # twice".
+        env:
+          SWIFTRECKLESS_EXPECT_BACKEND: stub
         run: swift test
       - name: Test prebuilt-XCFramework path with live engine
         env:
           SWIFTRECKLESS_FORCE_SOURCE_BUILD: ''
+          # Clearing the force flag puts Package.swift back on the Apple binary
+          # arm (useBinaryEngine = hostIsApple && (underXcode || !forceSource)),
+          # which links RecklessFFI.xcframework and never defines
+          # RECKLESS_SOURCE_ARM — so the backend is `real`. This is the only
+          # lane in the repo that links the genuine engine, and therefore the
+          # only place the `real` half of the contract can ever fire; every
+          # other job declares `stub`, so before this line the assertion had
+          # only been exercised in one direction.
+          #
+          # It also closes a green-but-empty hole. If a manifest or environment
+          # change ever left this step on the source arm, it would link the
+          # no-op stubs, the live engine smoke test below would DISABLE itself
+          # (its .enabled(if:) requires a non-stub link) and record a skip, and
+          # the job would pass having executed no engine code at all. With the
+          # expectation declared, that configuration is a red instead.
+          SWIFTRECKLESS_EXPECT_BACKEND: real
         run: |
           set -euo pipefail
           NET='rust/networks/v54-5478683c.nnue'
