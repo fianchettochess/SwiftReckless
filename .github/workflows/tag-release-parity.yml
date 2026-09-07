@@ -1,0 +1,42 @@
+name: SwiftReckless — Tag/release parity
+
+# Every version tag must be a RELEASE: made by release.yml, carrying an asset,
+# with a url+checksum binaryTarget naming its own download.
+#
+# A tag made by hand (`git tag && git push`) is indistinguishable in `git tag`
+# output and passes every other gate — but ships nothing, and a version-pinning
+# consumer cannot discover it. Three accumulated that way here — 0.9.12 through
+# 0.9.14 — all in PATH MODE, resolving only because the 148 MB xcframework was
+# committed in the tree. They were deleted rather than repaired: a release tag
+# has to point at a release commit. Nothing noticed, because noticing means
+# comparing two lists that nothing compared.
+#
+# SCHEDULED RATHER THAN ON TAG PUSH, deliberately. release.yml creates the tag
+# THROUGH a draft release and publishes moments later, so a push-triggered check
+# would race its own release workflow and cry wolf on every legitimate cut. A
+# daily sweep catches a hand-made tag within a day, which is the timescale the
+# problem actually occurs on.
+
+on:
+  schedule:
+    - cron: '53 9 * * *'      # daily, 09:53 UTC — offset from SwiftStockfish's sweep
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: Every version tag has a release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Tags and their Package.swift are the subject of the check.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check tag/release parity
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_tag_release_parity.py
