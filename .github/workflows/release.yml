@@ -13,6 +13,14 @@ on:
         description: 'New release version / tag (for example 0.9.10)'
         required: true
         type: string
+      source_ref:
+        description: >-
+          Existing TAG to build from, for backfilling a release onto a line the
+          default branch has moved past. Leave empty to build the default
+          branch, which is the normal case.
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: release-${{ inputs.version }}
@@ -37,9 +45,12 @@ jobs:
     runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 240
     steps:
-      - name: Checkout default-branch source
+      - name: Checkout release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Empty resolves to the default branch, the normal release. A tag
+          # builds that line instead — see the source-revision guard.
+          ref: ${{ inputs.source_ref }}
           fetch-depth: 0
           # The runner account owns its workspace; avoid importing its global
           # Git configuration solely to add a safe-directory exception.
@@ -51,6 +62,7 @@ jobs:
       - name: Validate version, source revision, and collisions
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SOURCE_REF: ${{ inputs.source_ref }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -79,9 +91,26 @@ jobs:
           fi
           git check-ref-format "refs/tags/${VERSION}"
           git fetch --no-tags origin "${DEFAULT_BRANCH}"
-          if [ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/${DEFAULT_BRANCH}")" ]; then
-            echo "::error::dispatch this workflow from the current ${DEFAULT_BRANCH} head"
-            exit 1
+          # TWO SOURCES, BOTH REVIEWED. Normally the release must be the current
+          # default-branch head. A BACKFILL builds an existing TAG, so a line the
+          # branch has moved past can still get a release — it must be a tag that
+          # already exists on origin, so this cannot publish an arbitrary commit.
+          # (release backfill 2026-09-07)
+          if [ -z "${SOURCE_REF}" ]; then
+            if [ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/${DEFAULT_BRANCH}")" ]; then
+              echo "::error::dispatch this workflow from the current ${DEFAULT_BRANCH} head"
+              exit 1
+            fi
+          else
+            if ! git ls-remote --exit-code --tags origin "refs/tags/${SOURCE_REF}" >/dev/null; then
+              echo "::error::source_ref '${SOURCE_REF}' is not an existing tag on origin"
+              exit 1
+            fi
+            if [ "$(git rev-parse HEAD)" != "$(git rev-parse "${SOURCE_REF}^{commit}")" ]; then
+              echo "::error::checkout is not at '${SOURCE_REF}'"
+              exit 1
+            fi
+            echo "note: backfilling ${VERSION} from tag ${SOURCE_REF}"
           fi
           assert_tag_absent() {
             local status
@@ -252,11 +281,67 @@ jobs:
       - name: Create the final detached release commit
         id: release_commit
         env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           CHECKSUM: ${{ steps.checksum.outputs.checksum }}
           REPO: ${{ github.repository }}
         run: |
+          # KNOWN, RECORDED 2026-09-01: THE MANIFEST THIS PRODUCES CANNOT BE
+          # RESOLVED WHILE THIS REPOSITORY IS PRIVATE. Not a defect in the
+          # rewrite — a property of the endpoint it points at.
+          #
+          # MEASURED against the real 0.9.11 asset:
+          #
+          #   https://github.com/<owner>/<repo>/releases/download/0.9.11/RecklessFFI.xcframework.zip
+          #     no auth            -> 404
+          #     Authorization: Bearer <token>  -> 404
+          #     Authorization: token  <token>  -> 404
+          #     Basic x-access-token:<token>   -> 404
+          #
+          #   https://api.github.com/repos/<owner>/<repo>/releases/assets/509577665
+          #     Basic x-access-token:<token>   -> 200 (302 -> real ZIP bytes)
+          #
+          # SwiftPM CAN authenticate binary downloads — it reads ~/.netrc and
+          # says so ("credentials for https://github.com/... found in netrc
+          # file") — but GitHub serves private release assets only from the API
+          # endpoint, and that URL has no `.zip` path extension, which SwiftPM
+          # rejects at manifest validation
+          # (supportedRemoteBinaryDependencyExtensions = ["artifactbundleindex",
+          # "zip"]). So `swift package resolve` fails badResponseStatusCode(404)
+          # with and without credentials.
+          #
+          # WHY NOBODY HAS HIT IT. No consumer references this package by
+          # version: Fianchetto.xcodeproj uses XCLocalSwiftPackageReference
+          # "../SwiftReckless", and fianchetto-cmp uses
+          # `.package(path: recklessCheckout)`. They all link the COMMITTED
+          # xcframework from a sibling checkout. And the "versioned remote
+          # consumer" step earlier in this workflow runs BEFORE this rewrite, so
+          # it exercises the path manifest rather than the one that ships.
+          #
+          # WHEN THIS REPOSITORY GOES PUBLIC, releases/download/ starts serving
+          # and this becomes real. Verify it then rather than assuming:
+          #
+          #   swift package resolve   # against the tagged version, from a clean
+          #                           # clone with no sibling checkouts present
+          #
+          # and move the versioned-consumer test to AFTER the rewrite so it
+          # tests what is shipped. Only then is the committed xcframework
+          # redundant; removing it before that breaks the Apple app's build,
+          # which links it from the sibling path.
           set -euo pipefail
           git checkout --detach
+
+          # A BACKFILL CARRIES THE DEFAULT BRANCH'S CI CONFIG, and must: the
+          # publish step pushes this commit to a `release-prep/` branch, and
+          # GitHub refuses a GITHUB_TOKEN push that "creates or updates" a
+          # workflow file — which an old tag's `.github/workflows/` does by
+          # definition once the branch has moved. `workflows` is not a grantable
+          # GITHUB_TOKEN scope, so there is nothing to permit; the tree must not
+          # differ there. `.github/` is not part of the Swift package and no
+          # consumer of a release tag reads it. (release backfill 2026-09-07)
+          if [ -n "${SOURCE_REF}" ]; then
+            git checkout "origin/${DEFAULT_BRANCH}" -- .github
+          fi
           python3 .github/scripts/rewrite_binary_target.py \
             "https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}" \
             "${CHECKSUM}"
@@ -267,10 +352,15 @@ jobs:
             grep -qxF "${pattern}" .gitignore || printf '%s\n' "${pattern}" >> .gitignore
           done
           git add Package.swift .gitignore
+          [ -n "${SOURCE_REF}" ] && git add .github
           git diff --cached --check
 
-          UNEXPECTED="$(git diff --cached --name-only | \
-            grep -Ev '^(Package.swift|\.gitignore|Frameworks/RecklessFFI\.xcframework/)' || true)"
+          # `.github/` is stageable ONLY on a backfill, for the reason above. On
+          # a normal release the tree is already the default branch's, so a
+          # difference there would be unexplained.
+          ALLOWED='^(Package.swift|\.gitignore|Frameworks/RecklessFFI\.xcframework/)'
+          [ -n "${SOURCE_REF}" ] && ALLOWED="${ALLOWED%)}|\.github/)"
+          UNEXPECTED="$(git diff --cached --name-only | grep -Ev "${ALLOWED}" || true)"
           if [ -n "${UNEXPECTED}" ]; then
             echo "::error::unexpected paths staged for the release commit"
             printf '%s\n' "${UNEXPECTED}"
