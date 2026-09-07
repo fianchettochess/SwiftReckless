@@ -65,11 +65,12 @@ on:
       - 'Tools/build-desktop.sh'
       - 'Tools/verify-desktop-gate.sh'
       - '.github/workflows/ci-desktop-archive.yml'
-  # PATHS-FILTERED ON PURPOSE. This repo is private, so hosted minutes are
-  # billed, and this job costs one RELEASE-profile engine compile plus two
-  # release Swift builds. Running it on every PR touching a README would be
-  # waste; running it on no PR at all would mean the first sign of a broken
-  # desktop link is a red main. The filter is every input that can change what
+  # PATHS-FILTERED ON PURPOSE. This job costs one RELEASE-profile engine
+  # compile plus two release Swift builds. Running it on every PR touching a
+  # README would be waste; running it on no PR at all would mean the first sign
+  # of a broken desktop link is a red main. (The original reason was billing —
+  # the repository was private and hosted minutes were charged. It went public
+  # on 2026-09-07 and they are free now; the wall clock is still real.) The filter is every input that can change what
   # gets linked or how it behaves.
   pull_request:
     paths: *gate_paths

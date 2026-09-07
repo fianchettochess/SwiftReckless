@@ -42,9 +42,13 @@ on:
       - 'Tools/build-desktop.sh'
       - 'Tools/verify-desktop-gate.sh'
       - '.github/workflows/ci-desktop-archive-windows.yml'
-  # Paths-filtered for the same reason the Linux gate is: this repo is private,
-  # hosted minutes are billed, and Windows minutes are billed at twice Linux.
-  # The filter is every input that can change what gets linked or how it behaves.
+  # Paths-filtered for the same reason the Linux gate is. The original reason
+  # was billing — this repository was private, so hosted minutes were charged,
+  # Windows at twice Linux. It went public on 2026-09-07 and those minutes are
+  # free now, but the filter stays: this job costs a RELEASE-profile engine
+  # compile, and spending ten minutes of wall clock on a README PR is waste
+  # whoever is paying. The filter is every input that can change what gets
+  # linked or how it behaves.
   pull_request:
     paths: *gate_paths
 
@@ -74,9 +78,9 @@ jobs:
           # ARM64. The archive already cross-builds — both creckless.lib files
           # are produced from a macOS host in about fifteen seconds each, and
           # both carry all four rk_ffi_* symbols — so what has never happened is
-          # RUNNING one. `windows-11-arm` is generally available; on a private
-          # repository it is billed rather than free, which is the cost this
-          # entry buys the answer with.
+          # RUNNING one. `windows-11-arm` is generally available, and since this
+          # repository went public on 2026-09-07 it is free rather than billed,
+          # so the cost this entry was weighing is no longer the obstacle.
           #
           # Deliberately NOT run under emulation on the x86_64 runner: an x64
           # binary does execute under Prism, so a gate that allowed it would

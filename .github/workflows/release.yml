@@ -286,48 +286,27 @@ jobs:
           CHECKSUM: ${{ steps.checksum.outputs.checksum }}
           REPO: ${{ github.repository }}
         run: |
-          # KNOWN, RECORDED 2026-09-01: THE MANIFEST THIS PRODUCES CANNOT BE
-          # RESOLVED WHILE THIS REPOSITORY IS PRIVATE. Not a defect in the
-          # rewrite — a property of the endpoint it points at.
+          # RESOLVED, 2026-09-07. This block used to record that the manifest
+          # produced here could not be resolved at all: GitHub served private
+          # release assets only from the API endpoint, whose URL has no `.zip`
+          # extension, so SwiftPM rejected it at manifest validation and
+          # `swift package resolve` failed 404 with and without credentials.
+          # That was a property of the repository being private, and it is not
+          # private any more.
           #
-          # MEASURED against the real 0.9.11 asset:
+          # Verified rather than assumed, the way the old note asked: a scratch
+          # package pinning `exact: "0.9.15"` against the public URL, resolved
+          # and built with no credentials in the environment, fetched the
+          # 156 MB xcframework from releases/download and linked it.
           #
-          #   https://github.com/<owner>/<repo>/releases/download/0.9.11/RecklessFFI.xcframework.zip
-          #     no auth            -> 404
-          #     Authorization: Bearer <token>  -> 404
-          #     Authorization: token  <token>  -> 404
-          #     Basic x-access-token:<token>   -> 404
-          #
-          #   https://api.github.com/repos/<owner>/<repo>/releases/assets/509577665
-          #     Basic x-access-token:<token>   -> 200 (302 -> real ZIP bytes)
-          #
-          # SwiftPM CAN authenticate binary downloads — it reads ~/.netrc and
-          # says so ("credentials for https://github.com/... found in netrc
-          # file") — but GitHub serves private release assets only from the API
-          # endpoint, and that URL has no `.zip` path extension, which SwiftPM
-          # rejects at manifest validation
-          # (supportedRemoteBinaryDependencyExtensions = ["artifactbundleindex",
-          # "zip"]). So `swift package resolve` fails badResponseStatusCode(404)
-          # with and without credentials.
-          #
-          # WHY NOBODY HAS HIT IT. No consumer references this package by
-          # version: Fianchetto.xcodeproj uses XCLocalSwiftPackageReference
-          # "../SwiftReckless", and fianchetto-cmp uses
-          # `.package(path: recklessCheckout)`. They all link the COMMITTED
-          # xcframework from a sibling checkout. And the "versioned remote
-          # consumer" step earlier in this workflow runs BEFORE this rewrite, so
-          # it exercises the path manifest rather than the one that ships.
-          #
-          # WHEN THIS REPOSITORY GOES PUBLIC, releases/download/ starts serving
-          # and this becomes real. Verify it then rather than assuming:
-          #
-          #   swift package resolve   # against the tagged version, from a clean
-          #                           # clone with no sibling checkouts present
-          #
-          # and move the versioned-consumer test to AFTER the rewrite so it
-          # tests what is shipped. Only then is the committed xcframework
-          # redundant; removing it before that breaks the Apple app's build,
-          # which links it from the sibling path.
+          # The old note also asked that the versioned-consumer test move after
+          # the rewrite, "so it tests what is shipped". It could not simply
+          # move: the rewritten manifest points at a release that this run has
+          # not published yet, so nothing after the rewrite and before the
+          # upload can resolve it either. The test therefore stays here, where
+          # it catches identity and product-graph mistakes cheaply against the
+          # path manifest, and a second one runs after publication against the
+          # real URL. That last step is the one that tests what ships.
           set -euo pipefail
           git checkout --detach
 
@@ -461,3 +440,48 @@ jobs:
           test "$(gh release view "${VERSION}" --json isDraft --jq '.isDraft')" = 'false'
           test "$(git ls-remote origin "refs/tags/${VERSION}" | \
             awk 'NR == 1 { print $1 }')" = "${RELEASE_COMMIT}"
+
+      # THE ONLY STEP THAT TESTS WHAT SHIPS. Everything above resolves the path
+      # manifest from a local bare clone; this resolves the published tag from
+      # github.com and fetches the asset the release actually carries, through
+      # the url+checksum manifest a real consumer gets. It runs last because it
+      # cannot run earlier: the URL in that manifest names a release that does
+      # not exist until the step above publishes it.
+      #
+      # Deliberately unauthenticated. The repository is public, so a consumer
+      # needs no credentials, and inheriting the job's would hide a regression
+      # in exactly the case this exists to catch.
+      - name: Resolve the published version as an anonymous consumer
+        run: |
+          set -euo pipefail
+          PROBE="$(mktemp -d)"
+          trap 'rm -rf "${PROBE}"' EXIT
+          mkdir -p "${PROBE}/Sources/Probe"
+          cat > "${PROBE}/Package.swift" <<MANIFEST
+          // swift-tools-version: 6.0
+          import PackageDescription
+          let package = Package(
+              name: "Probe",
+              platforms: [.macOS(.v13)],
+              dependencies: [
+                  .package(url: "https://github.com/${GITHUB_REPOSITORY}.git", exact: "${VERSION}"),
+              ],
+              targets: [
+                  .executableTarget(name: "Probe", dependencies: [
+                      .product(name: "SwiftReckless", package: "SwiftReckless"),
+                  ]),
+              ]
+          )
+          MANIFEST
+          # The heredoc above is indented for readability; strip it back.
+          sed -i '' 's/^          //' "${PROBE}/Package.swift"
+          printf 'import SwiftReckless\nprint("resolved \(String(describing: RecklessEngine.self))")\n' \
+            > "${PROBE}/Sources/Probe/main.swift"
+
+          env -u GH_TOKEN -u GITHUB_TOKEN -u SWIFTRECKLESS_TEST_URL \
+            swift build --package-path "${PROBE}" \
+              --scratch-path "${RUNNER_TEMP}/published-consumer"
+
+          test -d "${RUNNER_TEMP}/published-consumer/artifacts/swiftreckless/RecklessFFI/RecklessFFI.xcframework" \
+            || { echo "::error::resolved without fetching the release xcframework"; exit 1; }
+          echo "published ${VERSION} resolves and links for an anonymous consumer"
