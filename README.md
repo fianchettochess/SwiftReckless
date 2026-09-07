@@ -212,16 +212,28 @@ Opting in and then supplying nothing is a **link error**
 (`unable to find library -lcreckless`, `could not open 'creckless.lib'`), never a
 quiet fallback to stubs.
 
-The prebuilt XCFramework is committed to `main` as a path-based binary target,
-so a fresh clone links with a plain `swift build` on Apple — no rebuild needed.
-Rebuild it (see below) only when the Rust engine changes; the manual release
-workflow creates a detached tag commit whose binary target uses `url:` and
-`checksum:`, so the tag itself stays lean without mutating `main`.
+`main` uses a path-based binary target pointing at
+`Frameworks/RecklessFFI.xcframework`, and that framework is **not committed**,
+so a fresh clone has no engine binary. Build one before a local `swift build`:
+
+```bash
+Tools/build-xcframework.sh   # writes the gitignored Frameworks/RecklessFFI.xcframework
+```
+
+Consumers do not need this. They pin a version tag, whose manifest carries a
+`url:` and `checksum:` binary target, and SwiftPM fetches the asset from the
+release. The manual release workflow produces that manifest on a detached tag
+commit, so `main` stays path-based and the workflow stays rerunnable.
+
+It was committed until 2026-09-07, for one reason: SwiftPM cannot fetch a
+binaryTarget's release asset from a *private* repository, so `url:` mode worked
+for nobody. Publishing the package made it real, and 610.5 MB of accumulated
+framework blobs — 101 of them, one per rebuild — were removed from history.
 
 Quick sanity check:
 
 ```bash
-swift build                 # Apple host: binary arm, links the existing XCFramework
+swift build                 # Apple host: binary arm, links the XCFramework you built above
 swift test                  # Offline, cancellation, hermetic download, and net-guarded live suites
 
 # Optional live CLI smoke on the Apple binary arm: stage and verify the net first.

@@ -44,10 +44,11 @@
 //   * Linux / Windows desktop: source arm via `Tools/build-desktop.sh` +
 //     SWIFTRECKLESS_LINK_ARCHIVE=1 and a linker search path (see README).
 //
-// The `binaryTarget` points to `Frameworks/RecklessFFI.xcframework`, which IS
-// committed (~148 MB, 10 slices, plain git — matches SwiftStockfish) so a fresh
-// clone / CI resolves without a Rust rebuild. Rebuild with
-// Tools/build-xcframework.sh after a Reckless engine update and commit it.
+// The `binaryTarget` points to `Frameworks/RecklessFFI.xcframework`, which is
+// NOT committed (~148 MB, 10 slices). A fresh clone therefore has no framework:
+// build one with Tools/build-xcframework.sh before a local `swift build`.
+// Consumers never do this — they pin a version tag, whose manifest carries a
+// url:+checksum: binaryTarget, and SwiftPM fetches the release asset.
 // The optimized x86_64 slices require AVX2/BMI2/POPCNT (Haswell-class Intel or
 // newer); Reckless selects SIMD at compile time and does not runtime-dispatch.
 
