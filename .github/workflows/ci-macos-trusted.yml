@@ -27,7 +27,10 @@ jobs:
     # group to this exact workflow on refs/heads/main. These labels only route
     # the job; they are not an authorization boundary.
     runs-on: [self-hosted, macOS, X64]
-    timeout-minutes: 45
+    # Raised from 45 with the XCFramework build: a fresh checkout no longer
+    # carries it, so this job compiles the Rust FFI crate for ten slices before
+    # it can build or test anything.
+    timeout-minutes: 90
     env:
       # Force the source-stub path past the prebuilt RecklessFFI.xcframework
       # (committed, ~150 MB — forced off here so this job exercises the
@@ -69,6 +72,14 @@ jobs:
           grep -qw AVX2 <<< "${LEAF7_FEATURES}"
           grep -qw BMI2 <<< "${LEAF7_FEATURES}"
           grep -qw POPCNT <<< "${BASE_FEATURES}"
+      # main is PATH MODE: the binaryTarget points at
+      # Frameworks/RecklessFFI.xcframework, and since "Stop committing the
+      # xcframework" that file is gitignored and absent from a fresh checkout,
+      # so `swift build` dies at manifest load with "local binary target
+      # 'RecklessFFI' ... does not contain a binary artifact". Consumers never
+      # hit this: they pin a version and SwiftPM fetches the release asset.
+      - name: Build the XCFramework this checkout does not carry
+        run: Tools/build-xcframework.sh
       - name: Build source-stub package path
         run: swift build
       - name: Test source-stub package path
