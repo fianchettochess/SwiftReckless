@@ -572,3 +572,13 @@ SwiftReckless uses AGPL-3.0, matching the upstream
 is not redistributed in this repository. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency and network
 provenance.
+
+### Portable network integrity hashing
+
+On platforms without CryptoKit, the existing `VendoredSHA256` streaming API
+uses the private `CRecklessNetworkHash` target. It implements FIPS 180-4 with
+fixed-size state and byte loads, without external crypto dependencies, SIMD
+requirements or compiler optimization overrides. Apple loader verification
+continues to use CryptoKit. The full pinned digest checks and cache behavior
+are unchanged. Binary padding/streaming vectors and independent copied-state
+checks run alongside the existing NIST vectors.

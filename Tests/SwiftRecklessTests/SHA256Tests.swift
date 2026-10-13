@@ -3,7 +3,7 @@
 //  SwiftRecklessTests
 //
 //  NIST FIPS 180-4 vectors for the vendored SHA256, plus streaming
-//  equivalence. This is the proof that the pure-Swift digest matches the
+//  equivalence. This is the proof that the portable digest matches the
 //  published standard before it is trusted to gate NNUE network-file
 //  installation. Runs on every `swift test` (host platform is irrelevant:
 //  the implementation is independent of CryptoKit).
