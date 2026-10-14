@@ -58,7 +58,7 @@ with open(os.environ["BUILD_CALLS"], "a") as handle:
             result = subprocess.run(["bash", str(script)], cwd=caller, env=environment,
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            expected = {"arm64-v8a": "+neon", "armeabi-v7a": "+neon,+vfpv3",
+            expected = {"arm64-v8a": "+neon", "armeabi-v7a": "+neon,+vfp3",
                         "x86_64": "+avx2,+popcnt", "x86": "+sse4.2,+popcnt"}
             recorded = [json.loads(line) for line in calls.read_text().splitlines()]
             self.assertEqual([call["abi"] for call in recorded], list(expected))
