@@ -22,7 +22,7 @@
 #   armv7-linux-androideabi (armeabi-v7a — 32-bit legacy; include for broad compat):
 #     +neon       — present on virtually all ARMv7 Android devices (required
 #                   by the Android CDD since API 21).
-#     +vfp3      — Rust/LLVM spelling for the VFP v3 FPU available on ARMv7.
+#     LLVM's NEON feature also enables VFP v3; no separate VFP flag is needed.
 #
 #   x86_64-linux-android (x86_64 — emulator, Chrome OS):
 #     +avx2,+popcnt — AVX2 SIMD, widely available on x86_64 Android emulators
@@ -115,7 +115,7 @@ cargo_ndk_build() {
 }
 
 cargo_ndk_build "arm64-v8a"    "aarch64-linux-android"    "+neon"
-cargo_ndk_build "armeabi-v7a"  "armv7-linux-androideabi"  "+neon,+vfp3"
+cargo_ndk_build "armeabi-v7a"  "armv7-linux-androideabi"  "+neon"
 cargo_ndk_build "x86_64"       "x86_64-linux-android"     "+avx2,+popcnt"
 cargo_ndk_build "x86"          "i686-linux-android"       "+sse4.2,+popcnt"
 
