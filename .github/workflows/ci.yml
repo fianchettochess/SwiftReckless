@@ -70,6 +70,9 @@ jobs:
       - name: Checkout SwiftReckless
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Verify Android builder invocation contract
+        run: python3 Tools/Tests/test-build-android.py
+
       # Keyed on the net's own SHA-256, so a hit is always the right bytes and a
       # net bump is a new key rather than a stale entry. Deliberately the SAME
       # key as ci-desktop-archive.yml, which stages the identical immutable file:

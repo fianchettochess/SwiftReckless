@@ -97,12 +97,17 @@ cargo_ndk_build() {
     echo ""
     echo "==> cargo ndk --target $abi --platform $API -- build --release"
     echo "    target features: $features (build paths remapped)"
-    CARGO_ENCODED_RUSTFLAGS="$(encoded_rustflags "$features")" \
+    # cargo-ndk performs metadata discovery from cwd even with --manifest-path.
+    # Keep this scoped so callers can invoke the script from any directory.
+    (
+        cd "$RUST_DIR"
+        CARGO_ENCODED_RUSTFLAGS="$(encoded_rustflags "$features")" \
         "$RUSTUP" run "$STABLE_TOOLCHAIN" cargo ndk \
             --manifest-path "$RUST_DIR/Cargo.toml" \
             --target "$abi" \
             --platform "$API" \
             -- build --locked --release
+    )
     local lib="$RUST_DIR/target/$rust_target/release/libcreckless.a"
     mkdir -p "$OUT_DIR/$abi"
     cp "$lib" "$OUT_DIR/$abi/libcreckless.a"
