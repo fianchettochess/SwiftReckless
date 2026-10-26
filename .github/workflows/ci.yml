@@ -73,6 +73,9 @@ jobs:
       - name: Verify Android builder invocation contract
         run: python3 Tools/Tests/test-build-android.py
 
+      - name: Verify desktop builder linker contract
+        run: python3 Tools/Tests/test-build-desktop.py
+
       # Keyed on the net's own SHA-256, so a hit is always the right bytes and a
       # net bump is a new key rather than a stale entry. Deliberately the SAME
       # key as ci-desktop-archive.yml, which stages the identical immutable file:
