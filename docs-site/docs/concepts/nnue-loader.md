@@ -5,7 +5,8 @@ evaluation network. It must complete before `RecklessEngine` is created.
 
 !!! warning "Net must come before engine"
     `RecklessEngine.init(networkDirectory:)` returns `nil` — not a crash, but a
-    clean failure — when the NNUE net is absent. Always `await ensure(in:)` first.
+    clean failure — when the NNUE net is absent or fails its pinned SHA-256.
+    Always `await ensure(in:)` first.
 
 ## The network
 

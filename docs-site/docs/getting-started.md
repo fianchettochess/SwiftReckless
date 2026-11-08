@@ -6,8 +6,8 @@ Provision the NNUE network, create the engine, and exchange UCI.
 
 The NNUE network (`v54-5478683c.nnue`) is **not embedded** in the engine binary —
 it is loaded from disk at runtime. The engine returns `nil` on initialization if the
-file is missing or unreadable, so always ensure the net is present before creating
-the engine.
+file is missing or does not match its pinned SHA-256, so always ensure the net is
+present before creating the engine.
 
 `RecklessNetworkLoader.ensure(in:)` is idempotent: a valid, present net is never
 re-downloaded (it verifies the complete SHA-256 on Apple, Linux, and Android,
@@ -44,8 +44,8 @@ without calling the closure.
 ## 2. Create the engine
 
 `RecklessEngine.init(networkDirectory:)` is failable — it returns `nil` if the
-NNUE net is absent from `networkDirectory` or if the Rust FFI layer could not start
-the engine thread.
+NNUE net is absent from `networkDirectory` or damaged, or if the Rust FFI layer
+could not start the engine thread.
 
 ```swift
 guard let engine = RecklessEngine(networkDirectory: netDir) else {

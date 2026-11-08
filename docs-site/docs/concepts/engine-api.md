@@ -28,7 +28,8 @@ against destroy) plus the Rust mutex/channel implementation.
 
 !!! warning "NNUE net must be present before init"
     `init(networkDirectory:)` returns `nil` if `v54-5478683c.nnue` is not present in
-    `networkDirectory`. Call `RecklessNetworkLoader().ensure(in:)` first.
+    `networkDirectory` or does not match its pinned SHA-256. Call
+    `RecklessNetworkLoader().ensure(in:)` first.
 
 ## Initializer
 
@@ -37,11 +38,15 @@ public init?(networkDirectory: URL)
 ```
 
 - Creates and starts a Reckless engine instance. Under the hood:
-    1. Verifies `networkDirectory/v54-5478683c.nnue` exists on disk.
+    1. Verifies `networkDirectory/v54-5478683c.nnue` against its complete pinned
+       SHA-256 (`RecklessNetworkLoader.requiredNetworkSatisfied(in:)`). A match
+       is remembered for that path, size and modification date, so creating
+       the engine again does not rehash the file.
     2. Calls `rk_create(network_path)`, which loads the NNUE net and spawns a
        background thread running the Reckless UCI loop.
     3. Registers the C output callback that feeds `output`.
-- Returns `nil` if the net is absent or if the Rust FFI layer could not start.
+- Returns `nil` if the net is absent or damaged, or if the Rust FFI layer could
+  not start.
 
 ## Properties
 
