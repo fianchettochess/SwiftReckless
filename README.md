@@ -460,7 +460,7 @@ Runtime strategy (the same as Stockfish networks in
   [RecklessNetworks](https://github.com/codedeliveryservice/RecklessNetworks/releases/tag/networks)
   release page on first launch (~60 MB).
 - The complete pinned SHA-256 digest is verified after download on Apple,
-  Linux, and Android (CryptoKit on Apple; swift-crypto elsewhere).
+  Linux, and Android (CryptoKit on Apple; the package's own `SHA256` elsewhere).
 - On Android, the same loader runs (Foundation and URLSession via swift-corelibs-foundation).
 - The downloaded path is passed to `RecklessEngine(networkDirectory:)` →
   `rk_create(network_path)`, which loads it at runtime. When Reckless upgrades its network,
