@@ -107,6 +107,13 @@ final class RecklessVerifiedNetworkMemo: @unchecked Sendable {
     private let lock = NSLock()
     private var verified = Set<String>()
     private var hashes = 0
+    private let hash: @Sendable (URL, String) -> Bool
+
+    /// `hash` is a test seam: a test substitutes one that rewrites the file
+    /// mid-hash, to prove such a match is not remembered.
+    init(hash: @escaping @Sendable (URL, String) -> Bool = RecklessNetworkLoader.fileMatchesSHA256) {
+        self.hash = hash
+    }
 
     /// How many times this memo has read and hashed a file, rather than
     /// answering from what it already verified.
@@ -130,13 +137,27 @@ final class RecklessVerifiedNetworkMemo: @unchecked Sendable {
         hashes += 1
         lock.unlock()
 
-        let matched = RecklessNetworkLoader.fileMatchesSHA256(url, expectedSHA256: expectedSHA256)
-        if matched, let identity {
+        let matched = hash(url, expectedSHA256)
+        // Record only if the file still has the identity it had BEFORE the
+        // hash. A rewrite during the read would otherwise attach this match to
+        // bytes nobody hashed.
+        if matched, let identity,
+           Self.identity(for: url, expecting: expectedSHA256) == identity {
             lock.lock()
             verified.insert(identity)
             lock.unlock()
         }
         return matched
+    }
+
+    /// Record a file whose bytes were verified under another name and then
+    /// moved here (`ensure` hashes the staging file, then renames it), so the
+    /// first engine created after a download does not hash the net again.
+    func recordVerified(_ url: URL, expectedSHA256: String) {
+        guard let identity = Self.identity(for: url, expecting: expectedSHA256) else { return }
+        lock.lock()
+        verified.insert(identity)
+        lock.unlock()
     }
 
     /// Identity that changes whenever the file's bytes could have changed, or
@@ -331,6 +352,7 @@ public struct RecklessNetworkLoader: Sendable {
 
         // 2. If already present and valid, skip download. Through the memo,
         // so an engine created right after this does not hash it again.
+        // (A fresh download is recorded after its install, in step 5.)
         if fm.fileExists(atPath: destination.path),
            memo.fileMatches(destination, expectedSHA256: net.sha256) {
             try Task.checkCancellation()
@@ -359,6 +381,11 @@ public struct RecklessNetworkLoader: Sendable {
                 "could not install \(net.filename): \(error.localizedDescription)"
             )
         }
+
+        // The staging file's bytes matched before the rename, and a rename
+        // does not change them; record the installed file so the engine's
+        // preflight does not hash it again.
+        memo.recordVerified(destination, expectedSHA256: net.sha256)
 
         return destination
     }

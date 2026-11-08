@@ -1,5 +1,9 @@
 import Testing
 import Foundation
+// HTTPURLResponse lives here on Linux and Windows (swift-corelibs-foundation).
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 // SHA-256 for the fixture hashing assertion lives in TestSHA256.swift, which
 // mirrors the loader's seam. swift-crypto was dropped from this package (see
 // Package.swift); importing `Crypto` here is what broke the non-Apple build.
@@ -142,14 +146,25 @@ struct NetworkLoaderTests {
         let fixture = try SyntheticNet()
         defer { fixture.remove() }
         let loader = RecklessNetworkLoader(network: fixture.net, memo: RecklessVerifiedNetworkMemo())
+        // Both files get the same whole-second date, as a coarse-timestamp
+        // filesystem would give them, so this test behaves the same everywhere.
+        let stamp: [FileAttributeKey: Any] = [.modificationDate: Date(timeIntervalSinceReferenceDate: 700_000_000)]
+        try FileManager.default.setAttributes(stamp, ofItemAtPath: fixture.file.path)
 
         #expect(loader.requiredNetworkSatisfied(in: fixture.directory), "the intact net must pass")
 
+        // A FRESH memo for the damaged file: the first memo already holds the
+        // intact file's path|size|mtime, and on a filesystem with coarse
+        // timestamps (Linux before 6.13, NTFS) a same-size rewrite can keep
+        // that identity. That is the memo's documented limit, not what this
+        // test is about; here the question is whether the hash refuses it.
         var damaged = fixture.content
         damaged[damaged.count / 2] ^= 0x01
         try damaged.write(to: fixture.file)
+        try FileManager.default.setAttributes(stamp, ofItemAtPath: fixture.file.path)
         #expect(try Data(contentsOf: fixture.file).count == fixture.content.count)
-        #expect(!loader.requiredNetworkSatisfied(in: fixture.directory),
+        let fresh = RecklessNetworkLoader(network: fixture.net, memo: RecklessVerifiedNetworkMemo())
+        #expect(!fresh.requiredNetworkSatisfied(in: fixture.directory),
                 "a same-size net with one flipped bit must be refused")
 
         try FileManager.default.removeItem(at: fixture.file)
@@ -173,6 +188,63 @@ struct NetworkLoaderTests {
         #expect(loader.requiredNetworkSatisfied(in: fixture.directory))
         #expect(loader.requiredNetworkSatisfied(in: fixture.directory))
         #expect(memo.hashCount == 1, "an unchanged, already-verified net was hashed \(memo.hashCount) times")
+    }
+
+    /// GATES: a net installed by `ensure` is not hashed again by the engine
+    /// preflight that follows. HOW IT COULD BREAK: the post-install record is
+    /// dropped, or keyed on the staging name instead of the installed one.
+    /// WHAT THE USER WOULD LOSE: a second full read of a fresh 60 MB download
+    /// on the first engine start (minutes without CryptoKit).
+    @Test("a net ensure just downloaded is not hashed again by the preflight")
+    func downloadedNetIsRecordedAfterInstall() async throws {
+        let fixture = try SyntheticNet()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.file)
+        let content = fixture.content
+        let memo = RecklessVerifiedNetworkMemo()
+        let loader = RecklessNetworkLoader(
+            network: fixture.net,
+            transport: { url, staging in
+                try content.write(to: staging)
+                return HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            },
+            memo: memo
+        )
+
+        _ = try await loader.ensure(in: fixture.directory)
+        #expect(loader.requiredNetworkSatisfied(in: fixture.directory))
+        #expect(memo.hashCount == 0, "the installed net was hashed \(memo.hashCount) more time(s)")
+    }
+
+    /// GATES: a match is remembered only for the file state that was hashed.
+    /// HOW IT COULD BREAK: the post-hash re-stat is "simplified" away, so a
+    /// file rewritten while it was being read is remembered as verified.
+    /// WHAT THE USER WOULD LOSE: the damaged-net refusal, for that process.
+    @Test("a file that changes while it is hashed is not remembered")
+    func fileChangedDuringHashIsNotRemembered() throws {
+        let fixture = try SyntheticNet()
+        defer { fixture.remove() }
+        let content = fixture.content
+        let memo = RecklessVerifiedNetworkMemo(hash: { url, expected in
+            let matched = RecklessNetworkLoader.fileMatchesSHA256(url, expectedSHA256: expected)
+            try? (content + Data([0])).write(to: url)   // rewritten mid-hash: new size
+            return matched
+        })
+        let loader = RecklessNetworkLoader(network: fixture.net, memo: memo)
+        let fm = FileManager.default
+        // A whole-second date, which every filesystem stores exactly, so the
+        // restored identity below is byte-for-byte the one first seen.
+        let original = Date(timeIntervalSinceReferenceDate: 700_000_000)
+        try fm.setAttributes([.modificationDate: original], ofItemAtPath: fixture.file.path)
+
+        #expect(loader.requiredNetworkSatisfied(in: fixture.directory))
+        // Put back exactly the identity the first call saw before hashing —
+        // same bytes, size and modification date — so only a remembered match
+        // could answer the second call without hashing.
+        try content.write(to: fixture.file)
+        try fm.setAttributes([.modificationDate: original], ofItemAtPath: fixture.file.path)
+        _ = loader.requiredNetworkSatisfied(in: fixture.directory)
+        #expect(memo.hashCount == 2, "a match taken while the file changed was remembered")
     }
 
     @Test("Verification compares the complete SHA-256, not only the filename prefix")
