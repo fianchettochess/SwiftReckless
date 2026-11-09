@@ -524,7 +524,10 @@ Linux CI also creates an ephemeral SemVer-tagged Git repository and builds the
 fixture in `Tests/RemoteConsumer` through a versioned `.package(url:)`
 dependency. This catches unsafe dependency settings that a root-package or
 local-path build would miss. The release workflow repeats that fixture on its
-Intel macOS runner after rebuilding the artifact.
+Intel macOS runner after rebuilding the artifact. Because `main` does not commit
+the XCFramework, it tags a scratch clone of the release source with the freshly
+built framework force-added, so the consumer links the exact binary that is
+about to be published.
 
 Every workflow runs on GitHub-hosted runners. The pull-request-capable
 `ci.yml` workflow covers Rust and Linux. The separate `ci-macos-trusted.yml`
