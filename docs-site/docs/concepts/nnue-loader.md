@@ -5,7 +5,8 @@ evaluation network. It must complete before `RecklessEngine` is created.
 
 !!! warning "Net must come before engine"
     `RecklessEngine.init(networkDirectory:)` returns `nil` — not a crash, but a
-    clean failure — when the NNUE net is absent. Always `await ensure(in:)` first.
+    clean failure — when the NNUE net is absent or fails its pinned SHA-256.
+    Always `await ensure(in:)` first.
 
 ## The network
 
@@ -140,11 +141,11 @@ removed upstream's `include_bytes!` embed specifically to enable this workflow.
 | Platform | Verification |
 |---|---|
 | Apple (macOS · iOS · tvOS · watchOS · visionOS) | **Full SHA-256** via `CryptoKit.SHA256` — the complete 64-hex-char digest is compared against `Network.sha256`. |
-| Linux · Android | **Full SHA-256** via swift-crypto's source-compatible `Crypto.SHA256`. |
+| Linux · Android | **Full SHA-256** via the package's own FIPS 180-4 implementation (`Sources/SwiftReckless/SHA256.swift`). |
 
-The Apple dependency graph is unchanged when building the normal binary arm —
-`CryptoKit` is a system framework, so swift-crypto is resolved only by the
-non-Apple/source arm.
+Neither is a package dependency: `CryptoKit` is a system framework and the
+vendored hasher is source in this package, so every arm resolves the same empty
+Swift dependency graph.
 
 ## See also
 

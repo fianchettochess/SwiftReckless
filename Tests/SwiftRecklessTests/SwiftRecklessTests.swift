@@ -1,5 +1,9 @@
 import Testing
 import Foundation
+// HTTPURLResponse lives here on Linux and Windows (swift-corelibs-foundation).
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 // SHA-256 for the fixture hashing assertion lives in TestSHA256.swift, which
 // mirrors the loader's seam. swift-crypto was dropped from this package (see
 // Package.swift); importing `Crypto` here is what broke the non-Apple build.
@@ -11,6 +15,31 @@ import CReckless
 // ─────────────────────────────────────────────────────────────────────────────
 // Suite 1 — Offline / pure-logic (always run, no engine, no net)
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// A synthetic net on disk whose pinned full SHA-256 really matches its bytes,
+/// named the way the loader names nets, in a directory of its own.
+private struct SyntheticNet {
+    let directory: URL
+    let content: Data
+    let net: RecklessNetworkLoader.Network
+    var file: URL { directory.appendingPathComponent(net.filename) }
+
+    init() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reckless-preflight-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        content = Data((0..<4096).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
+        let sha = sha256Hex(content)
+        net = RecklessNetworkLoader.Network(
+            filename: "v54-\(String(sha.prefix(8))).nnue",
+            sha256: sha,
+            downloadURL: URL(string: "https://invalid.example/never-fetched")!
+        )
+        try content.write(to: directory.appendingPathComponent(net.filename))
+    }
+
+    func remove() { try? FileManager.default.removeItem(at: directory) }
+}
 
 @Suite("RecklessNetworkLoader offline tests")
 struct NetworkLoaderTests {
@@ -103,6 +132,119 @@ struct NetworkLoaderTests {
                 "unrelated hidden files must be untouched")
         #expect(fm.fileExists(atPath: notes.path), "non-net files must be untouched")
         #expect(try Data(contentsOf: validURL) == content, "the kept net's bytes are undisturbed")
+    }
+
+    /// GATES: the engine preflight refuses a net whose bytes are damaged but
+    /// whose name and size are right (Fianchetto-b32.166).
+    /// HOW IT COULD BREAK BY ACCIDENT: the preflight slides back to a presence
+    /// or size check, or compares only the 8-hex filename prefix — each is a
+    /// one-line "simplification" and each accepts this file.
+    /// WHAT THE USER WOULD LOSE: a bit-rotted net loads without error and
+    /// plays and annotates plausibly but wrongly, with nothing to say so.
+    @Test("the preflight refuses a net of the right size with one flipped byte")
+    func preflightRefusesCorruptNetOfCorrectSize() throws {
+        let fixture = try SyntheticNet()
+        defer { fixture.remove() }
+        let loader = RecklessNetworkLoader(network: fixture.net, memo: RecklessVerifiedNetworkMemo())
+        // Both files get the same whole-second date, as a coarse-timestamp
+        // filesystem would give them, so this test behaves the same everywhere.
+        let stamp: [FileAttributeKey: Any] = [.modificationDate: Date(timeIntervalSinceReferenceDate: 700_000_000)]
+        try FileManager.default.setAttributes(stamp, ofItemAtPath: fixture.file.path)
+
+        #expect(loader.requiredNetworkSatisfied(in: fixture.directory), "the intact net must pass")
+
+        // A FRESH memo for the damaged file: the first memo already holds the
+        // intact file's path|size|mtime, and on a filesystem with coarse
+        // timestamps (Linux before 6.13, NTFS) a same-size rewrite can keep
+        // that identity. That is the memo's documented limit, not what this
+        // test is about; here the question is whether the hash refuses it.
+        var damaged = fixture.content
+        damaged[damaged.count / 2] ^= 0x01
+        try damaged.write(to: fixture.file)
+        try FileManager.default.setAttributes(stamp, ofItemAtPath: fixture.file.path)
+        #expect(try Data(contentsOf: fixture.file).count == fixture.content.count)
+        let fresh = RecklessNetworkLoader(network: fixture.net, memo: RecklessVerifiedNetworkMemo())
+        #expect(!fresh.requiredNetworkSatisfied(in: fixture.directory),
+                "a same-size net with one flipped bit must be refused")
+
+        try FileManager.default.removeItem(at: fixture.file)
+        #expect(!loader.requiredNetworkSatisfied(in: fixture.directory), "an absent net must be refused")
+    }
+
+    /// GATES: repeated engine creation does not rehash an unchanged net.
+    /// HOW IT COULD BREAK BY ACCIDENT: the memo lookup is dropped or its key
+    /// stops matching itself (a path spelled two ways, a digest cased two
+    /// ways), and every preflight silently reads the whole file again.
+    /// WHAT THE USER WOULD LOSE: seconds, or on hosts without CryptoKit
+    /// minutes, on every engine start — including each respawn after the app
+    /// sheds the engine in the background.
+    @Test("a net that already matched is not hashed again")
+    func matchedNetIsHashedOnce() throws {
+        let fixture = try SyntheticNet()
+        defer { fixture.remove() }
+        let memo = RecklessVerifiedNetworkMemo()
+        let loader = RecklessNetworkLoader(network: fixture.net, memo: memo)
+
+        #expect(loader.requiredNetworkSatisfied(in: fixture.directory))
+        #expect(loader.requiredNetworkSatisfied(in: fixture.directory))
+        #expect(memo.hashCount == 1, "an unchanged, already-verified net was hashed \(memo.hashCount) times")
+    }
+
+    /// GATES: a net installed by `ensure` is not hashed again by the engine
+    /// preflight that follows. HOW IT COULD BREAK: the post-install record is
+    /// dropped, or keyed on the staging name instead of the installed one.
+    /// WHAT THE USER WOULD LOSE: a second full read of a fresh 60 MB download
+    /// on the first engine start (minutes without CryptoKit).
+    @Test("a net ensure just downloaded is not hashed again by the preflight")
+    func downloadedNetIsRecordedAfterInstall() async throws {
+        let fixture = try SyntheticNet()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.file)
+        let content = fixture.content
+        let memo = RecklessVerifiedNetworkMemo()
+        let loader = RecklessNetworkLoader(
+            network: fixture.net,
+            transport: { url, staging in
+                try content.write(to: staging)
+                return HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            },
+            memo: memo
+        )
+
+        _ = try await loader.ensure(in: fixture.directory)
+        #expect(loader.requiredNetworkSatisfied(in: fixture.directory))
+        #expect(memo.hashCount == 0, "the installed net was hashed \(memo.hashCount) more time(s)")
+    }
+
+    /// GATES: a match is remembered only for the file state that was hashed.
+    /// HOW IT COULD BREAK: the post-hash re-stat is "simplified" away, so a
+    /// file rewritten while it was being read is remembered as verified.
+    /// WHAT THE USER WOULD LOSE: the damaged-net refusal, for that process.
+    @Test("a file that changes while it is hashed is not remembered")
+    func fileChangedDuringHashIsNotRemembered() throws {
+        let fixture = try SyntheticNet()
+        defer { fixture.remove() }
+        let content = fixture.content
+        let memo = RecklessVerifiedNetworkMemo(hash: { url, expected in
+            let matched = RecklessNetworkLoader.fileMatchesSHA256(url, expectedSHA256: expected)
+            try? (content + Data([0])).write(to: url)   // rewritten mid-hash: new size
+            return matched
+        })
+        let loader = RecklessNetworkLoader(network: fixture.net, memo: memo)
+        let fm = FileManager.default
+        // A whole-second date, which every filesystem stores exactly, so the
+        // restored identity below is byte-for-byte the one first seen.
+        let original = Date(timeIntervalSinceReferenceDate: 700_000_000)
+        try fm.setAttributes([.modificationDate: original], ofItemAtPath: fixture.file.path)
+
+        #expect(loader.requiredNetworkSatisfied(in: fixture.directory))
+        // Put back exactly the identity the first call saw before hashing —
+        // same bytes, size and modification date — so only a remembered match
+        // could answer the second call without hashing.
+        try content.write(to: fixture.file)
+        try fm.setAttributes([.modificationDate: original], ofItemAtPath: fixture.file.path)
+        _ = loader.requiredNetworkSatisfied(in: fixture.directory)
+        #expect(memo.hashCount == 2, "a match taken while the file changed was remembered")
     }
 
     @Test("Verification compares the complete SHA-256, not only the filename prefix")
@@ -396,6 +538,35 @@ struct RecklessEngineSmokeTests {
         engine.shutdown()
         engine.shutdown() // idempotent
         engine.send("isready") // safe no-op after teardown
+    }
+
+    // The same refusal as the loader test above, through the real entry point
+    // and the real 60 MB net: before Fianchetto-b32.166 this file reached the
+    // Rust loader, which accepted it, and the engine started.
+    @Test(
+        "engine init refuses the real net with one flipped byte",
+        .enabled(
+            if: RecklessEngineSmokeTests.stagedNetDir != nil
+                && !RecklessEngineSmokeTests.isForcedSourceStubBuild,
+            "needs the gitignored dev net staged in rust/networks and a real (non-stub) engine link"
+        )
+    )
+    func initRefusesDamagedRealNet() throws {
+        let source = try #require(Self.stagedNetDir)
+            .appendingPathComponent(RecklessNetworkLoader.network.filename)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reckless-damaged-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        var bytes = try Data(contentsOf: source)
+        // Past the header, in the weights, where a flip is silent.
+        bytes[bytes.count / 2] ^= 0x01
+        try bytes.write(to: dir.appendingPathComponent(RecklessNetworkLoader.network.filename))
+
+        let engine = RecklessEngine(networkDirectory: dir)
+        engine?.shutdown()
+        #expect(engine == nil, "an engine started on a net that fails its pinned SHA-256")
     }
 
     // The restart contract (fork swiftreckless-v0.9.1): a clean shutdown

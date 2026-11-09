@@ -19,13 +19,17 @@ corresponding SwiftReckless binary is distributed.
 ## Other build dependencies
 
 - [rust-lang/libc](https://github.com/rust-lang/libc), used by the Rust FFI
-  crate, is offered under `MIT OR Apache-2.0`.
-- [apple/swift-crypto](https://github.com/apple/swift-crypto), used for SHA-256
-  verification on non-Apple source builds, is offered under Apache-2.0.
+  crate and by Reckless, is offered under `MIT OR Apache-2.0`.
 
-Those projects retain their own copyright notices and license texts. They are
-resolved from their upstream package repositories rather than copied into this
-source tree.
+That project retains its own copyright notices and license texts. It is resolved
+from crates.io rather than copied into this source tree. `Package.swift`
+declares no Swift package dependencies: SHA-256 comes from CryptoKit on Apple
+platforms and from the package's own FIPS 180-4 implementation
+(`Sources/CRecklessNetworkHash` behind `Sources/SwiftReckless/SHA256.swift`)
+elsewhere.
+
+`Tools/check-third-party-notices.py` fails if this list and the fork pin above
+disagree with `rust/Cargo.lock`, `Package.swift` or `.upstream-version`.
 
 ## Reckless NNUE network
 

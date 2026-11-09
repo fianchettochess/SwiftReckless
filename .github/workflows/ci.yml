@@ -29,6 +29,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The notices are what an AGPL corresponding-source reader follows. They kept
+  # listing swift-crypto after Package.swift dropped it (Fianchetto-b32.206).
+  # This compares them with rust/Cargo.lock, Package.swift and .upstream-version.
+  third-party-notices:
+    name: SwiftReckless — third-party notices agree with the package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout SwiftReckless
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Notices name the fork pin and the real dependencies
+        run: python3 Tools/check-third-party-notices.py
+
   rust:
     name: SwiftReckless — Rust FFI tests
     runs-on: ubuntu-latest

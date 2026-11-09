@@ -101,9 +101,8 @@ jobs:
     #     hosted, it is safe on pull_request, which is why the paths filter
     #     above is allowed to exist at all.
     runs-on: ubuntu-latest
-    # Cold cost is one release engine compile + two release Swift builds (each
-    # pulling swift-crypto, since both arms are the source arm on Linux) + a
-    # ~60 MB net download. 45 min is generous headroom on a cold cache.
+    # Cold cost is one release engine compile + two release Swift builds (both
+    # arms are the source arm on Linux) + a ~60 MB net download. 45 min is generous headroom on a cold cache.
     timeout-minutes: 45
     # PINNED TO THE ENVIRONMENT THE RECIPE WAS MEASURED IN: Ubuntu 24.04 +
     # Swift 6.3.3, matching the 2026-08-10 proof exactly. This is deliberately

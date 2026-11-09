@@ -15,8 +15,9 @@
 //  NNUE NOTE: Reckless requires the network file `v54-5478683c.nnue` to exist
 //  in `networkDirectory` before calling `init(networkDirectory:)`.  Use
 //  `RecklessNetworkLoader.ensure(in:)` to provision the net first.  The Rust
-//  FFI reads the net at runtime (`rk_ffi_create` receives the full path) and
-//  returns nil if the file is missing or unreadable.
+//  FFI reads the net at runtime (`rk_ffi_create` receives the full path).
+//  `init` first checks the net's complete pinned SHA-256 (memoized per path,
+//  size and modification date) and returns nil if it is missing or damaged.
 //
 //  CONCURRENCY: one `RecklessEngine` at a time — the Rust engine owns
 //  process-global tables, so the FFI rejects overlap. Sequential lifetimes
@@ -237,9 +238,9 @@ private func recklessLog(_ message: String) {
 ///
 /// - Important: The caller MUST ensure the required NNUE network already
 ///   exists in `networkDirectory` BEFORE creating the engine (the file
-///   `v54-5478683c.nnue` must be present there).  The Rust FFI returns `nil`
-///   if the file cannot be read, which surfaces as `init` returning `nil`
-///   here.  Run ``RecklessNetworkLoader/ensure(in:progress:)`` first.
+///   `v54-5478683c.nnue` must be present there and match its pinned SHA-256).
+///   A missing or damaged net makes `init` return `nil`.  Run
+///   ``RecklessNetworkLoader/ensure(in:progress:)`` first.
 ///
 /// - Important: Only ONE `RecklessEngine` may be alive in a process at a
 ///   time (the Rust engine owns process-global state), but sequential
@@ -308,7 +309,9 @@ public final class RecklessEngine: @unchecked Sendable {
     ///
     /// - Returns: `nil` if this build links the stub backend
     ///   (``RecklessBackend/current`` is `.stub` — no engine exists to start),
-    ///   if the net file is not present in `networkDirectory`, if the Rust FFI
+    ///   if the net file in `networkDirectory` is missing or does not match its
+    ///   pinned SHA-256 (re-provision it with
+    ///   ``RecklessNetworkLoader/ensure(in:progress:)``), if the Rust FFI
     ///   layer could not start it, if another engine is currently live, or if
     ///   an earlier failed startup left its engine thread unjoined (which
     ///   poisons the process's engine slot). Each of these logs a distinct
@@ -338,14 +341,18 @@ public final class RecklessEngine: @unchecked Sendable {
             return nil
         }
 
-        // Build the full path to the net file and verify it exists before
-        // handing it to the Rust FFI (which returns NULL on failure, but
-        // an explicit pre-check gives a clearer early-out).
+        // Verify the net's complete pinned SHA-256 before handing it to the
+        // Rust FFI. Presence is not enough: a net of the right size with
+        // damaged bytes loads without complaint and evaluates wrongly
+        // (Fianchetto-b32.166). The loader memoizes a match per path, size and
+        // modification date, so repeated creation does not rehash ~60 MB.
         let netFile = networkDirectory.appendingPathComponent(
             RecklessNetworkLoader.network.filename
         )
-        guard FileManager.default.fileExists(atPath: netFile.path) else {
-            recklessLog("[RecklessEngine] net file not found: \(netFile.path)")
+        guard RecklessNetworkLoader().requiredNetworkSatisfied(in: networkDirectory) else {
+            recklessLog(
+                "[RecklessEngine] net file missing or not the pinned SHA-256: \(netFile.path)"
+            )
             outputStorage.finish()
             return nil
         }

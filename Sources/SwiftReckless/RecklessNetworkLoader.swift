@@ -87,6 +87,93 @@ private final class RecklessDownloadTaskBox: @unchecked Sendable {
 /// The network filename encodes a SHA-256 prefix in its name (the same scheme
 /// Stockfish uses): `v54-5478683c.nnue`. The loader verifies the complete
 /// pinned SHA-256 digest on every supported platform.
+
+/// Process-wide memo of nets that have already passed full-digest verification.
+///
+/// `RecklessEngine.init` pre-flights the net on EVERY creation, and the net is
+/// ~60 MB. Without this memo each creation re-reads and re-hashes it: a fraction
+/// of a second with CryptoKit, but seconds to minutes with the vendored hasher
+/// on platforms without CryptoKit, and a host that sheds and respawns the
+/// engine on backgrounding creates it often.
+///
+/// The key includes size and modification date, so a net that is replaced,
+/// truncated, or rewritten on disk misses the memo and is verified again from
+/// scratch. Only successful verifications are recorded -- a mismatch is cheap
+/// to re-detect and must never be sticky. Deliberate twin of SwiftStockfish's
+/// VerifiedNetworkCache, plus a hash counter so tests can prove the memo holds.
+final class RecklessVerifiedNetworkMemo: @unchecked Sendable {
+    static let shared = RecklessVerifiedNetworkMemo()
+
+    private let lock = NSLock()
+    private var verified = Set<String>()
+    private var hashes = 0
+    private let hash: @Sendable (URL, String) -> Bool
+
+    /// `hash` is a test seam: a test substitutes one that rewrites the file
+    /// mid-hash, to prove such a match is not remembered.
+    init(hash: @escaping @Sendable (URL, String) -> Bool = RecklessNetworkLoader.fileMatchesSHA256) {
+        self.hash = hash
+    }
+
+    /// How many times this memo has read and hashed a file, rather than
+    /// answering from what it already verified.
+    var hashCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return hashes
+    }
+
+    /// `true` iff the file at `url` has the complete SHA-256 `expectedSHA256`,
+    /// hashing it only if this exact file state has not already matched.
+    func fileMatches(_ url: URL, expectedSHA256: String) -> Bool {
+        // A file that cannot be stat'ed has no identity; it takes the slow
+        // path, exactly as in the Stockfish twin, and is never recorded.
+        let identity = Self.identity(for: url, expecting: expectedSHA256)
+        lock.lock()
+        if let identity, verified.contains(identity) {
+            lock.unlock()
+            return true
+        }
+        hashes += 1
+        lock.unlock()
+
+        let matched = hash(url, expectedSHA256)
+        // Record only if the file still has the identity it had BEFORE the
+        // hash. A rewrite during the read would otherwise attach this match to
+        // bytes nobody hashed.
+        if matched, let identity,
+           Self.identity(for: url, expecting: expectedSHA256) == identity {
+            lock.lock()
+            verified.insert(identity)
+            lock.unlock()
+        }
+        return matched
+    }
+
+    /// Record a file whose bytes were verified under another name and then
+    /// moved here (`ensure` hashes the staging file, then renames it), so the
+    /// first engine created after a download does not hash the net again.
+    func recordVerified(_ url: URL, expectedSHA256: String) {
+        guard let identity = Self.identity(for: url, expecting: expectedSHA256) else { return }
+        lock.lock()
+        verified.insert(identity)
+        lock.unlock()
+    }
+
+    /// Identity that changes whenever the file's bytes could have changed, or
+    /// whenever the digest we expect of it changes. `nil` when the file cannot
+    /// be stat'ed.
+    static func identity(for url: URL, expecting digest: String) -> String? {
+        guard let attributes = try? FileManager.default
+                .attributesOfItem(atPath: url.path),
+              let size = (attributes[.size] as? NSNumber)?.uint64Value
+        else { return nil }
+        let modified = (attributes[.modificationDate] as? Date)?
+            .timeIntervalSinceReferenceDate ?? .nan
+        return "\(url.path)|\(size)|\(modified)|\(digest.lowercased())"
+    }
+}
+
 public struct RecklessNetworkLoader: Sendable {
 
     // ── Current network spec ──────────────────────────────────────────────────
@@ -161,6 +248,11 @@ public struct RecklessNetworkLoader: Sendable {
 
     private let transport: Transport
 
+    /// Which files have already matched, so a preflight need not rehash them.
+    /// Always the process-wide memo in production; tests inject their own to
+    /// count hashes without seeing other tests' work.
+    private let memo: RecklessVerifiedNetworkMemo
+
     public init() {
         self.init(network: Self.network)
     }
@@ -180,9 +272,41 @@ public struct RecklessNetworkLoader: Sendable {
     /// the download/cancellation paths can be exercised hermetically (see
     /// ``Transport``). Production callers use the public initializer, which
     /// installs the real URLSession transport.
-    init(network: Network, transport: @escaping Transport) {
+    init(
+        network: Network,
+        transport: @escaping Transport,
+        memo: RecklessVerifiedNetworkMemo = .shared
+    ) {
         self.requiredNetwork = network
         self.transport = transport
+        self.memo = memo
+    }
+
+    /// Testability seam: a synthetic net checked against an injected memo, so
+    /// a test can count hashes. Never downloads.
+    init(network: Network, memo: RecklessVerifiedNetworkMemo) {
+        self.init(
+            network: network,
+            transport: Self.urlSessionTransport(URLSession(configuration: .ephemeral)),
+            memo: memo
+        )
+    }
+
+    /// A non-downloading pre-flight: `true` iff the required net is present in
+    /// `directory` AND its complete SHA-256 matches the pinned digest.
+    ///
+    /// `RecklessEngine.init?` calls this before creating the engine. A net of
+    /// the right size with damaged bytes is not rejected by the Rust loader: it
+    /// loads, and the engine plays and evaluates plausibly but wrongly, feeding
+    /// engine consensus and annotation with no error anywhere. This turns that
+    /// into a nil the caller can answer by re-provisioning with ``ensure(in:progress:)``.
+    ///
+    /// A file that already matched in this process, at the same path, size and
+    /// modification date, is not hashed again. Twin of SwiftStockfish's
+    /// `StockfishNetworkLoader.requiredNetworksSatisfied(in:)`.
+    public func requiredNetworkSatisfied(in directory: URL) -> Bool {
+        let url = directory.appendingPathComponent(requiredNetwork.filename)
+        return memo.fileMatches(url, expectedSHA256: requiredNetwork.sha256)
     }
 
     /// Ensure `directory` contains the required NNUE network.
@@ -226,9 +350,11 @@ public struct RecklessNetworkLoader: Sendable {
 
         let destination = directory.appendingPathComponent(net.filename)
 
-        // 2. If already present and valid, skip download.
+        // 2. If already present and valid, skip download. Through the memo,
+        // so an engine created right after this does not hash it again.
+        // (A fresh download is recorded after its install, in step 5.)
         if fm.fileExists(atPath: destination.path),
-           Self.fileMatchesSHA256(destination, expectedSHA256: net.sha256) {
+           memo.fileMatches(destination, expectedSHA256: net.sha256) {
             try Task.checkCancellation()
             return destination
         }
@@ -255,6 +381,11 @@ public struct RecklessNetworkLoader: Sendable {
                 "could not install \(net.filename): \(error.localizedDescription)"
             )
         }
+
+        // The staging file's bytes matched before the rename, and a rename
+        // does not change them; record the installed file so the engine's
+        // preflight does not hash it again.
+        memo.recordVerified(destination, expectedSHA256: net.sha256)
 
         return destination
     }
