@@ -238,16 +238,63 @@ jobs:
           SWIFTRECKLESS_FORCE_SOURCE_BUILD: ''
         run: |
           set -euo pipefail
+          # THE TAGGED TREE MUST CARRY THE FRAMEWORK THIS RUN BUILT.
+          #
+          # The source tree is path mode: its binaryTarget names
+          # Frameworks/RecklessFFI.xcframework, which is gitignored and exists
+          # only in this workspace, because the build step above made it. A bare
+          # clone of the checkout carries commits, not that file, so a consumer
+          # resolving the clone fails at manifest load with "local binary target
+          # 'RecklessFFI' ... does not contain a binary artifact". This step
+          # passed through 0.9.15 only because the framework was still committed
+          # then. It has been broken since "Stop committing the xcframework"
+          # on every runner, and 0.9.16 was the first release to reach it.
+          #
+          # So build the versioned repository from a scratch clone: check out
+          # exactly the commit under release (HEAD, which is the tag for a
+          # backfill; GITHUB_SHA would be the default branch's head instead),
+          # force-add the freshly built framework in one throwaway commit, and
+          # tag that commit 999.0.0. Everything stays under RUNNER_TEMP; the
+          # workspace checkout, its index and origin are not touched. The
+          # consumer then resolves SwiftReckless by version through a URL and
+          # links the artifact this run will publish. The URL-mode manifest
+          # itself is resolved from GitHub after publishing, by the anonymous
+          # consumer step below.
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          WORK_REPO="${RUNNER_TEMP}/remote-consumer-source"
           # SwiftPM derives an unnamed URL dependency's package identity from
           # the repository basename. Keep it exactly "SwiftReckless" so the
           # consumer's product dependency resolves as it does from GitHub.
           BARE_REPO="${RUNNER_TEMP}/SwiftReckless.git"
-          git clone --bare . "${BARE_REPO}"
-          git --git-dir="${BARE_REPO}" tag 999.0.0 "${GITHUB_SHA}"
+          rm -rf "${WORK_REPO}" "${BARE_REPO}"
+          test -f Frameworks/RecklessFFI.xcframework/Info.plist
+
+          git clone --quiet --no-checkout . "${WORK_REPO}"
+          git -C "${WORK_REPO}" checkout --quiet --detach "${SOURCE_SHA}"
+          ditto Frameworks/RecklessFFI.xcframework \
+            "${WORK_REPO}/Frameworks/RecklessFFI.xcframework"
+          git -C "${WORK_REPO}" add --force Frameworks/RecklessFFI.xcframework
+          # Only the framework may differ from the commit under release.
+          UNEXPECTED="$(git -C "${WORK_REPO}" diff --cached --name-only | \
+            grep -Ev '^Frameworks/RecklessFFI\.xcframework/' || true)"
+          if [ -n "${UNEXPECTED}" ]; then
+            echo "::error::unexpected paths staged for the remote-consumer fixture"
+            printf '%s\n' "${UNEXPECTED}"
+            exit 1
+          fi
+          git -C "${WORK_REPO}" \
+            -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --quiet -m "Remote-consumer fixture: ${SOURCE_SHA} plus the built XCFramework"
+
+          git clone --quiet --bare "${WORK_REPO}" "${BARE_REPO}"
+          git --git-dir="${BARE_REPO}" tag 999.0.0 \
+            "$(git -C "${WORK_REPO}" rev-parse HEAD)"
           SWIFTRECKLESS_TEST_URL="file://${BARE_REPO}" \
             swift run \
               --package-path Tests/RemoteConsumer \
               --scratch-path "${RUNNER_TEMP}/remote-consumer-release"
+          rm -rf "${WORK_REPO}" "${BARE_REPO}"
 
       - name: Archive and verify the exact asset
         id: checksum
