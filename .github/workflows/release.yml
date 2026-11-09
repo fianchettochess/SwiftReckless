@@ -32,17 +32,28 @@ permissions:
 env:
   VERSION: ${{ inputs.version }}
   ASSET: RecklessFFI.xcframework.zip
-  DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+  # No DEVELOPER_DIR here: Tools/verify-macos-build-host.sh selects Xcode 26.x
+  # for the runner it lands on and exports it to every later step.
 
 jobs:
   release:
     name: SwiftReckless — build/publish XCFramework release
-    # Manual dispatch checks out only the current default-branch head, so fork
-    # pull requests never execute code on this persistent release machine.
-    # SECURITY: Before public visibility, restrict the organization runner
-    # group to this exact workflow on refs/heads/main. These labels only route
-    # the job; they are not an authorization boundary.
-    runs-on: [self-hosted, macOS, X64]
+    # Manual dispatch checks out only the current default-branch head (or an
+    # existing tag, for a backfill), so fork pull requests never reach this job.
+    #
+    # RUNNER. A GitHub-hosted Intel image: the repository is public, so hosted
+    # minutes are free, and the x86_64 binary slice must be tested on x86_64
+    # hardware with AVX2/BMI2/POPCNT. macos-26-intel ships Xcode 26.x side by
+    # side as /Applications/Xcode_26.N.app (the host check picks the newest)
+    # and rustup, which Tools/build-xcframework.sh uses to install its pinned
+    # stable and nightly toolchains. If GitHub retires hosted Intel macOS,
+    # change only this line back to `[self-hosted, macOS, X64]` — the host
+    # check, steps and paths are runner-neutral.
+    runs-on: macos-26-intel
+    # About 12 minutes on the self-hosted Mac Pro with warm rustup toolchains.
+    # A hosted runner has 4 vCPUs and installs both toolchains from cold, and
+    # four tier-3 slices rebuild std with nightly -Z build-std, so keep the
+    # generous budget (the hosted ceiling is 360).
     timeout-minutes: 240
     steps:
       - name: Checkout release source
@@ -52,8 +63,8 @@ jobs:
           # builds that line instead — see the source-revision guard.
           ref: ${{ inputs.source_ref }}
           fetch-depth: 0
-          # The runner account owns its workspace; avoid importing its global
-          # Git configuration solely to add a safe-directory exception.
+          # The runner account owns its workspace (hosted or self-hosted);
+          # skip adding a global safe-directory exception it does not need.
           set-safe-directory: false
           # Checkout removes its temporary token before subsequent steps. Git
           # authentication is reintroduced only in the two controlled steps.
@@ -134,33 +145,8 @@ jobs:
             exit 1
           fi
 
-      - name: Verify self-hosted toolchain and CPU capabilities
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = 'x86_64'
-          test -d "${DEVELOPER_DIR}"
-          test -x "${DEVELOPER_DIR}/usr/bin/xcodebuild"
-
-          XCODE_VERSION="$(xcodebuild -version | sed -n '1p')"
-          SWIFT_VERSION="$(xcrun swift --version | sed -n '1p')"
-          if ! grep -Eq '^Xcode 26([.][0-9]+)*$' <<< "${XCODE_VERSION}"; then
-            echo "::error::Xcode 26.x is required; found '${XCODE_VERSION}'"
-            exit 1
-          fi
-          if ! grep -Eq 'Apple Swift version 6([.][0-9]+)*([[:space:]]|$)' \
-            <<< "${SWIFT_VERSION}"; then
-            echo "::error::Apple Swift 6.x is required; found '${SWIFT_VERSION}'"
-            exit 1
-          fi
-          xcodebuild -version
-          xcrun swift --version
-          xcrun --sdk macosx --show-sdk-path
-
-          LEAF7_FEATURES="$(sysctl -n machdep.cpu.leaf7_features)"
-          BASE_FEATURES="$(sysctl -n machdep.cpu.features)"
-          grep -qw AVX2 <<< "${LEAF7_FEATURES}"
-          grep -qw BMI2 <<< "${LEAF7_FEATURES}"
-          grep -qw POPCNT <<< "${BASE_FEATURES}"
+      - name: Select Xcode 26 and verify toolchain and CPU capabilities
+        run: Tools/verify-macos-build-host.sh
 
       - name: Build exact XCFramework
         run: |

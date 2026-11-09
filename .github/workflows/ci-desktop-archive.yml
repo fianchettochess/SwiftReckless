@@ -93,9 +93,9 @@ jobs:
     #     path. build-desktop.sh can cross-build the ELF archive from macOS (a
     #     staticlib needs no linker), but macOS cannot RUN it, and running the
     #     search is the whole point.
-    #   * There is no self-hosted Linux runner in this repo — the only
-    #     self-hosted labels anywhere are [self-hosted, macOS, X64] — so hosted
-    #     is forced rather than chosen. It is also the cheapest tier (Linux 1x).
+    #   * There is no self-hosted Linux runner in this repo — every job runs on
+    #     GitHub-hosted images — so hosted is forced rather than chosen. It is
+    #     also the cheapest tier (Linux 1x).
     #   * Hosted keeps the standing security policy intact: persistent
     #     self-hosted machines never execute PR code. Because this job is
     #     hosted, it is safe on pull_request, which is why the paths filter
@@ -137,9 +137,10 @@ jobs:
       # The archive is compiled +avx2,+bmi2,+popcnt and Reckless selects SIMD at
       # COMPILE time with no runtime dispatch, so a runner without these does
       # not degrade — it raises SIGILL mid-search. Without this check the
-      # failure mode is an unexplained crash rather than a message. Both
-      # self-hosted macOS jobs already do the sysctl equivalent; the Linux side
-      # had no such guard because it had no such job.
+      # failure mode is an unexplained crash rather than a message. Both Intel
+      # macOS jobs already do the sysctl equivalent
+      # (Tools/verify-macos-build-host.sh); the Linux side had no such guard
+      # because it had no such job.
       - name: Precheck CPU baseline (AVX2 / BMI2 / POPCNT)
         run: |
           set -euo pipefail

@@ -1,9 +1,10 @@
 name: SwiftReckless — CI (Linux + Rust)
 
-# Hosted CI for the Rust FFI and Linux source-stub package path. This is the only
-# pull_request-capable workflow, so untrusted changes never run on a persistent
-# self-hosted machine. Trusted macOS source-stub and prebuilt-XCFramework coverage lives in
-# ci-macos-trusted.yml and runs only after a push to main or manual dispatch.
+# Hosted CI for the Rust FFI and Linux source-stub package path. This is the
+# pull_request-capable workflow. Trusted macOS source-stub and prebuilt-XCFramework
+# coverage lives in ci-macos-trusted.yml and runs only after a push to main or
+# manual dispatch, so that job can move between hosted and self-hosted Intel
+# Macs without ever exposing a persistent machine to pull-request code.
 #
 # The Linux source-stub path compiles the thin C bridge + RecklessHostStubs.c (no-op
 # rk_ffi_* symbols), proving the package builds and tests without the binary

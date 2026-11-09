@@ -87,7 +87,7 @@ SwiftReckless/
 ├── Frameworks/                        # RecklessFFI.xcframework — committed (path-based main; rebuild only when Rust changes)
 ├── .github/workflows/
 │   ├── ci.yml                         # Hosted Rust/Linux CI (push/PR/manual)
-│   ├── ci-macos-trusted.yml           # Self-hosted macOS CI (main push/manual only)
+│   ├── ci-macos-trusted.yml           # Hosted Intel macOS CI (main push/manual only)
 │   ├── release.yml                    # Tested draft release and one-time tag
 │   └── upstream-watch.yml             # Daily notify-only upstream check
 ├── docs-site/                         # MkDocs documentation site
@@ -524,15 +524,14 @@ Linux CI also creates an ephemeral SemVer-tagged Git repository and builds the
 fixture in `Tests/RemoteConsumer` through a versioned `.package(url:)`
 dependency. This catches unsafe dependency settings that a root-package or
 local-path build would miss. The release workflow repeats that fixture on its
-trusted host after rebuilding the artifact.
+Intel macOS runner after rebuilding the artifact.
 
-The pull-request-capable `ci.yml` workflow uses GitHub-hosted runners only. The
-separate `ci-macos-trusted.yml` workflow runs the source- and binary-arm macOS
-tests on the self-hosted Intel runner only after a push to `main` or a trusted
-manual dispatch. Before public visibility, the organization runner group must
-restrict each self-hosted workflow to its exact workflow file on
-`refs/heads/main`; `runs-on` labels route jobs but are not an authorization
-boundary.
+Every workflow runs on GitHub-hosted runners. The pull-request-capable
+`ci.yml` workflow covers Rust and Linux. The separate `ci-macos-trusted.yml`
+workflow runs the source- and binary-arm macOS tests on GitHub's hosted Intel
+macOS image (`macos-26-intel`) only after a push to `main` or a manual
+dispatch. That trigger limit is kept so the job could move back to a
+self-hosted Intel Mac by changing only its `runs-on` line.
 
 ## Releasing
 
@@ -546,10 +545,16 @@ the terminal-position guard, the source-arm Swift suite, the rebuilt binary-arm
 Swift suite, and the SemVer remote-consumer fixture. The source arm deliberately
 uses host stubs, so its live-engine test records the expected skip; the binary
 arm must run the live handshake against the artifact's macOS x86_64 slice.
-The release job runs on the trusted self-hosted Intel Mac Pro, requires the full
-`/Applications/Xcode.app` installation with an Xcode 26.x / Apple Swift 6.x
-toolchain, and checks x86_64 plus AVX2/BMI2/POPCNT before building. Patch-level
-Xcode and Swift updates are accepted when those capabilities remain available.
+The release job runs on GitHub's hosted Intel macOS image (`macos-26-intel`).
+[`Tools/verify-macos-build-host.sh`](Tools/verify-macos-build-host.sh) selects
+the newest `/Applications/Xcode_26.x.app` the image provides (falling back to
+`/Applications/Xcode.app` on a single-Xcode Mac), requires a full Xcode 26.x /
+Apple Swift 6.x toolchain, and checks x86_64 plus AVX2/BMI2/POPCNT before
+building. `Tools/build-xcframework.sh` installs its pinned stable and nightly
+Rust toolchains through the image's rustup. Patch-level Xcode and Swift updates
+are accepted when those capabilities remain available. The job keeps no state
+between runs; if GitHub retires hosted Intel macOS, moving it back to a
+self-hosted Intel Mac is a one-line `runs-on` change.
 ARM slices are cross-built and architecture/deployment-validated; Xcode Cloud
 will provide arm64 runtime coverage once enabled. The workflow then archives
 and byte-verifies the asset, creates the URL-based manifest commit on a detached

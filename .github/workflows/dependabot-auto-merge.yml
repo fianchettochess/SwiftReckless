@@ -72,11 +72,12 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           CI_PATH: ${{ github.event.workflow_run.path }}
           EXPECTED_CI_PATHS: ".github/workflows/ci.yml .github/workflows/ci-desktop-archive.yml"
-          # Paths whose contents execute on the persistent self-hosted runner.
-          # A `github-actions` patch bump rewrites every workflow file at once,
-          # but only the pull-request workflow is actually exercised by CI, so
-          # changes to these files would land unreviewed and then run on the
-          # owner's own machine. OWNER DECISION: clear this to auto-merge them
+          # Trusted workflows that pull-request CI never exercises: the release
+          # job holds `contents: write` and publishes the asset consumers pin by
+          # checksum. A `github-actions` patch bump rewrites every workflow file
+          # at once, but only the pull-request workflows are actually exercised
+          # by CI, so changes to these files would land unreviewed and then run
+          # with release authority. OWNER DECISION: clear this to auto-merge them
           # anyway. Note that Dependabot bumps an action across all workflow
           # files in a single PR, so a non-empty list here means `github-actions`
           # updates in practice always stop for a human.
@@ -155,13 +156,13 @@ jobs:
           done <<< "${TYPES}"
           echo "update types: $(tr '\n' ' ' <<< "${TYPES}")"
 
-          # 5. Blast-radius guard on files that execute on the self-hosted runner.
+          # 5. Blast-radius guard on trusted workflows that pull-request CI never runs.
           if [ -n "${GUARDED_PATHS}" ]; then
             CHANGED="$(gh api --paginate "repos/${GH_REPO}/pulls/${PR}/files" \
               --jq '.[].filename')"
             for GUARD in ${GUARDED_PATHS}; do
               if grep -qxF "${GUARD}" <<< "${CHANGED}"; then
-                decline "PR #${PR} modifies ${GUARD}, which runs on the self-hosted runner"
+                decline "PR #${PR} modifies ${GUARD}, which pull-request CI never exercises"
               fi
             done
           fi
