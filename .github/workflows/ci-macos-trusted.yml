@@ -1,8 +1,10 @@
 name: SwiftReckless — CI (macOS source stubs + prebuilt XCFramework)
 
-# Persistent self-hosted runners must never execute pull-request code. This
-# workflow exercises both delivery paths only after a push to main or an explicit
-# trusted manual dispatch. The Release workflow independently rebuilds and
+# Trusted macOS coverage of both delivery paths on an Intel Mac. It runs only
+# after a push to main or an explicit manual dispatch, and pull requests belong
+# in `ci.yml`. That limit predates the move to GitHub-hosted runners and is kept
+# so that moving this job back to a persistent self-hosted machine stays a
+# one-line `runs-on` change. The Release workflow independently rebuilds and
 # validates the exact artifact it publishes.
 
 on:
@@ -17,20 +19,22 @@ concurrency:
   group: trusted-macos-ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+# No DEVELOPER_DIR here: Tools/verify-macos-build-host.sh selects Xcode 26.x
+# for the runner it lands on and exports it to every later step.
 
 jobs:
-  macos-self-hosted:
-    name: SwiftReckless — source-stub + XCFramework tests (Intel self-hosted macOS)
-    # SECURITY: Before public visibility, restrict the organization runner
-    # group to this exact workflow on refs/heads/main. These labels only route
-    # the job; they are not an authorization boundary.
-    runs-on: [self-hosted, macOS, X64]
+  macos-intel:
+    name: SwiftReckless — source-stub + XCFramework tests (Intel macOS)
+    # GitHub-hosted Intel image with Xcode 26.x and rustup; see release.yml for
+    # the reasoning. To move back to the self-hosted Mac, change only this line
+    # to `[self-hosted, macOS, X64]`.
+    runs-on: macos-26-intel
     # Raised from 45 with the XCFramework build: a fresh checkout no longer
     # carries it, so this job compiles the Rust FFI crate for ten slices before
-    # it can build or test anything.
-    timeout-minutes: 90
+    # it can build or test anything. About 38 minutes on the self-hosted Mac
+    # Pro; a 4-vCPU hosted runner that also installs both Rust toolchains from
+    # cold needs several times that.
+    timeout-minutes: 180
     env:
       # Force the source-stub path past the prebuilt RecklessFFI.xcframework
       # (committed, ~150 MB — forced off here so this job exercises the
@@ -41,37 +45,12 @@ jobs:
       - name: Checkout SwiftReckless
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The trusted runner owns its workspace; avoid copying its account's
-          # global .gitconfig into the Actions log for safe-directory setup.
+          # The runner account owns its workspace (hosted or self-hosted);
+          # skip adding a global safe-directory exception it does not need.
           set-safe-directory: false
           persist-credentials: false
-      - name: Verify self-hosted toolchain and CPU capabilities
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = 'x86_64'
-          test -d "${DEVELOPER_DIR}"
-          test -x "${DEVELOPER_DIR}/usr/bin/xcodebuild"
-
-          XCODE_VERSION="$(xcodebuild -version | sed -n '1p')"
-          SWIFT_VERSION="$(xcrun swift --version | sed -n '1p')"
-          if ! grep -Eq '^Xcode 26([.][0-9]+)*$' <<< "${XCODE_VERSION}"; then
-            echo "::error::Xcode 26.x is required; found '${XCODE_VERSION}'"
-            exit 1
-          fi
-          if ! grep -Eq 'Apple Swift version 6([.][0-9]+)*([[:space:]]|$)' \
-            <<< "${SWIFT_VERSION}"; then
-            echo "::error::Apple Swift 6.x is required; found '${SWIFT_VERSION}'"
-            exit 1
-          fi
-          xcodebuild -version
-          xcrun swift --version
-          xcrun --sdk macosx --show-sdk-path
-
-          LEAF7_FEATURES="$(sysctl -n machdep.cpu.leaf7_features)"
-          BASE_FEATURES="$(sysctl -n machdep.cpu.features)"
-          grep -qw AVX2 <<< "${LEAF7_FEATURES}"
-          grep -qw BMI2 <<< "${LEAF7_FEATURES}"
-          grep -qw POPCNT <<< "${BASE_FEATURES}"
+      - name: Select Xcode 26 and verify toolchain and CPU capabilities
+        run: Tools/verify-macos-build-host.sh
       # main is PATH MODE: the binaryTarget points at
       # Frameworks/RecklessFFI.xcframework, and since "Stop committing the
       # xcframework" that file is gitignored and absent from a fresh checkout,

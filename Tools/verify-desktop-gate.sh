@@ -254,8 +254,8 @@ fi
 # CPU BASELINE. The archive is built +avx2,+bmi2,+popcnt and Reckless selects
 # SIMD at COMPILE time with no runtime dispatch, so a runner without these dies
 # with SIGILL mid-search. Checking here converts an unexplained crash into a
-# one-line message, before any compile time is spent. Both self-hosted macOS
-# jobs already do the sysctl equivalent.
+# one-line message, before any compile time is spent. Both Intel macOS jobs
+# already do the sysctl equivalent (Tools/verify-macos-build-host.sh).
 # The AVX2 baseline is an x86 statement. On aarch64 the archive is built for the
 # base ISA, where NEON is mandatory, so there is nothing to check and nothing
 # that can SIGILL for want of a feature.
