@@ -71,3 +71,5 @@ Frameworks/RecklessWindowsFFI.artifactbundle/
 # asset if they are ever to be shipped at all.
 build/
 android-libs/
+Frameworks/*.xcframework
+RecklessFFI.xcframework.zip
