@@ -362,6 +362,12 @@ canceling one of its waiters does not finish output for later searches.
 
 ### Linux and Windows (desktop)
 
+On native Windows, invoke the helper from a Visual Studio developer prompt.
+Git Bash otherwise puts its Unix `link.exe` ahead of the inherited tools.
+The helper prefers the MSVC linker beside that prompt's `cl.exe`, so Rust
+host build scripts use the right linker. The final output remains a static
+archive; cross-builds also need a working linker for their host build scripts.
+
 Desktop uses the **source arm** too, and follows the Android shape: build the
 Rust static library, then hand it to the link. The difference is that the
 desktop archive is asked for by name (`.linkedLibrary("creckless")`, a safe
@@ -369,7 +375,7 @@ build setting) and the consumer supplies only the *search path*, so nothing
 machine-local has to enter a manifest.
 
 ```bash
-# 1. Build the archive (cross-builds from any host — a staticlib needs no linker)
+# 1. Build the archive (host build scripts still need a working host linker)
 bash Tools/build-desktop.sh linux          # → rust/target/x86_64-unknown-linux-gnu/release/libcreckless.a
 bash Tools/build-desktop.sh windows        # → rust/target/x86_64-pc-windows-msvc/release/creckless.lib
 
@@ -383,8 +389,16 @@ swift build
 ```powershell
 # 2b. Windows (PowerShell)
 $env:SWIFTRECKLESS_LINK_ARCHIVE = '1'
-swift build -Xlinker "/LIBPATH:$PWD\rust\target\x86_64-pc-windows-msvc\release"
+$archiveDir = Join-Path $PWD 'rust\target\x86_64-pc-windows-msvc\release'
+swift build -Xlinker "/LIBPATH:$archiveDir" -Xlinker "$archiveDir\creckless.lib"
 ```
+
+Supply the Rust archive explicitly on Windows. A standalone package build
+also produces `CReckless.lib`, which has the same filename as `creckless.lib`
+on a case-insensitive filesystem. A search directory alone can therefore
+select the bridge product instead of the Rust archive. The helper prints a
+quoted Git Bash command with the explicit input and the MSYS conversion guard;
+the PowerShell form above needs no MSYS setting.
 
 > [!WARNING]
 > On Windows, prefer `-Xlinker /LIBPATH:`. Setting `LIB` from an ordinary shell

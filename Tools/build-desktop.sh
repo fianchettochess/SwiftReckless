@@ -17,9 +17,9 @@
 #
 # PREREQUISITES
 #   rustup (the script installs the pinned toolchain and the requested target).
-#   No system linker is needed: a `staticlib` is assembled by rustc's archiver,
-#   so BOTH targets cross-build from any host — including macOS, which is how
-#   the archives used to validate this path were produced.
+#   The target archive is assembled by rustc's archiver, but Rust host build
+#   scripts still require a working host linker. On native Windows, inherit a
+#   Visual Studio developer prompt; the helper prefers its MSVC linker below.
 #
 # SIMD BASELINE. Matches the x86_64 Apple slices: AVX2 + BMI2 + POPCNT
 # (Haswell-class, 2013+). Reckless selects its NNUE path at COMPILE time and has
@@ -40,6 +40,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 RUST_DIR="$REPO_ROOT/rust"
+
+# Git Bash puts its Unix link.exe ahead of the inherited developer-prompt
+# PATH. Rust needs Microsoft's linker for host build-script executables even
+# when the requested output is a static library. Prefer the linker beside the
+# MSVC compiler already selected by that prompt; keep other hosts unchanged.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        DESKTOP_MSVC_CL="$(command -v cl.exe || true)"
+        if [ -n "$DESKTOP_MSVC_CL" ]; then
+            DESKTOP_MSVC_BIN="$(dirname "$DESKTOP_MSVC_CL")"
+            if [ -x "$DESKTOP_MSVC_BIN/link.exe" ]; then
+                export PATH="$DESKTOP_MSVC_BIN:$PATH"
+            fi
+        fi
+        ;;
+esac
 
 BUILD_CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 BUILD_RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
@@ -177,7 +193,16 @@ build_target() {
     echo "      export SWIFTRECKLESS_LINK_ARCHIVE=1"
     case "$triple" in
         *windows-msvc)
-            echo "      swift build -Xlinker /LIBPATH:$dir"
+            local swift_dir="$dir" swift_archive="$archive"
+            if command -v cygpath >/dev/null 2>&1; then
+                swift_dir="$(cygpath -m "$dir")"
+                swift_archive="$(cygpath -m "$archive")"
+            fi
+            # The package's CReckless.lib product shadows creckless.lib on a
+            # case-insensitive filesystem. Name the Rust input explicitly as
+            # well as keeping its search directory for the declared dependency.
+            echo "      MSYS2_ARG_CONV_EXCL=/LIBPATH: swift build -Xlinker \"/LIBPATH:$swift_dir\" -Xlinker \"$swift_archive\""
+            echo "      (The explicit Rust archive avoids CReckless.lib shadowing.)"
             echo "      (Prefer /LIBPATH:. Defining LIB outside a Visual Studio developer"
             echo "       prompt stops clang auto-detecting the MSVC/Windows SDK lib dirs and"
             echo "       breaks the link on msvcrt.lib / oldnames.lib / msvcprt.lib.)" ;;
