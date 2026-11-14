@@ -119,8 +119,16 @@ info "binary: $BIN"
 # 3. Did SwiftPM actually select the variant?
 # ─────────────────────────────────────────────────────────────────────────────
 say "Bundle consumption"
+# Swift 6.4's default build system (swiftbuild) links the variant without
+# printing the native build system's `Copying` line, so that line alone is no
+# longer evidence either way. The binary is: this literal exists only in the
+# Rust library (rust/src/ffi.rs, rk_ffi_create), so finding it proves the
+# bundle's archive was linked, at the cause, whichever build system ran.
+ENGINE_LITERAL="engine started (per-instance I/O, no fd redirect)"
 if grep -q "Copying creckless.lib" "$BUILD_LOG"; then
     pass "SwiftPM reported 'Copying creckless.lib' — the variant was selected"
+elif [ -f "$BIN" ] && LC_ALL=C grep -aqF "$ENGINE_LITERAL" "$BIN"; then
+    pass "the built binary contains the bundle's engine — the variant was selected"
 else
     fail "SwiftPM never reported 'Copying creckless.lib'. The bundle is present and"
     fail "      well-formed but was NOT selected — check supportedTriples against"

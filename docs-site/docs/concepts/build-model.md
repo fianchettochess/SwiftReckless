@@ -180,8 +180,9 @@ both targets cross-build from any host.
 ```bash
 # Linux
 export SWIFTRECKLESS_LINK_ARCHIVE=1
-export LIBRARY_PATH=$PWD/rust/target/x86_64-unknown-linux-gnu/release
-swift build            # or: swift build -Xlinker -L<that directory>
+swift build -Xlinker -L$PWD/rust/target/x86_64-unknown-linux-gnu/release
+# Not LIBRARY_PATH: from Swift 6.4 the default build system (swiftbuild) does
+# not pass it to the link, and the build fails with `cannot find -lcreckless`.
 ```
 
 ```powershell

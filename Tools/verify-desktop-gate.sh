@@ -418,8 +418,11 @@ mkdir -p "$LOG_DIR"
 # cached across CI runs anyway.
 rm -rf "$STUB_SCRATCH" "$REAL_SCRATCH"
 
-# HOW THE REAL ARM IS TOLD WHERE THE ARCHIVE IS. On Linux, LIBRARY_PATH. On
-# Windows, `-Xlinker /LIBPATH:` and specifically NOT the LIB environment
+# HOW THE REAL ARM IS TOLD WHERE THE ARCHIVE IS. On Linux, `-Xlinker -L`, NOT
+# LIBRARY_PATH: Swift 6.4 made `--build-system swiftbuild` the default, and Swift
+# Build does not pass LIBRARY_PATH to the link (measured 2026-11-13 with a
+# throwaway package: swift:6.3.3 links with LIBRARY_PATH, swift:6.4.2 fails with
+# `cannot find -l...`; `-Xlinker -L` links on both). On Windows, `-Xlinker /LIBPATH:` and specifically NOT the LIB environment
 # variable: Tools/build-desktop.sh records why, and it is not a style choice —
 # defining LIB outside a Visual Studio developer prompt stops clang
 # auto-detecting the MSVC and Windows SDK library directories, and the link then
@@ -458,8 +461,8 @@ if [ "$WANT_OS" = "Windows" ]; then
     REAL_ARGS=(-Xlinker "/LIBPATH:$WIN_ARCHIVE_DIR")
     SEARCH_DESC="-Xlinker /LIBPATH:$WIN_ARCHIVE_DIR"
 else
-    REAL_ENV+=("LIBRARY_PATH=$ARCHIVE_DIR")
-    SEARCH_DESC="LIBRARY_PATH=$ARCHIVE_DIR"
+    REAL_ARGS=(-Xlinker "-L$ARCHIVE_DIR")
+    SEARCH_DESC="-Xlinker -L$ARCHIVE_DIR"
 fi
 
 say "Arm 1 of 2 — STUB (negative control, no opt-in, no linker search path)"

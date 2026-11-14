@@ -261,9 +261,9 @@ if useBinaryEngine {
     // Typical invocation (Linux / Windows desktop, host build):
     //   bash Tools/build-desktop.sh                  # → the archive
     //   SWIFTRECKLESS_LINK_ARCHIVE=1 \
-    //   LIBRARY_PATH=/path/to/rust/target/x86_64-unknown-linux-gnu/release \
-    //   swift build
-    // `swift build -Xlinker -L<dir>` works equally well; the search path is the
+    //   swift build -Xlinker -L/path/to/rust/target/x86_64-unknown-linux-gnu/release
+    // Not LIBRARY_PATH: from Swift 6.4 the default build system (swiftbuild)
+    // does not pass it to the link. The search path is the
     // consumer's to supply, exactly as the archive path is on Android. On
     // Windows use `-Xlinker /LIBPATH:<dir>` and NOT the LIB environment
     // variable: defining LIB outside a Visual Studio developer prompt stops

@@ -375,9 +375,8 @@ bash Tools/build-desktop.sh windows        # → rust/target/x86_64-pc-windows-m
 
 # 2a. Linux: opt in, and put the directory on the linker search path
 export SWIFTRECKLESS_LINK_ARCHIVE=1
-export LIBRARY_PATH=$PWD/rust/target/x86_64-unknown-linux-gnu/release
-swift build
-# equivalently:  swift build -Xlinker -L$PWD/rust/target/x86_64-unknown-linux-gnu/release
+swift build -Xlinker -L$PWD/rust/target/x86_64-unknown-linux-gnu/release
+# Not LIBRARY_PATH: Swift 6.4's default build system (swiftbuild) ignores it.
 ```
 
 ```powershell

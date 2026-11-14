@@ -182,8 +182,8 @@ build_target() {
             echo "       prompt stops clang auto-detecting the MSVC/Windows SDK lib dirs and"
             echo "       breaks the link on msvcrt.lib / oldnames.lib / msvcprt.lib.)" ;;
         *)
-            echo "      export LIBRARY_PATH=$dir"
-            echo "      (or: swift build -Xlinker -L$dir)" ;;
+            echo "      swift build -Xlinker -L$dir"
+            echo "      (Not LIBRARY_PATH: Swift 6.4's default build system ignores it.)" ;;
     esac
     echo "    Then confirm what you actually linked (do not assume):"
     echo "      SWIFTRECKLESS_EXPECT_BACKEND=real swift test --filter RecklessBackendTests"
