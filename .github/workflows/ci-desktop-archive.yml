@@ -105,14 +105,14 @@ jobs:
     # arms are the source arm on Linux) + a ~60 MB net download. 45 min is generous headroom on a cold cache.
     timeout-minutes: 45
     # PINNED TO THE ENVIRONMENT THE RECIPE WAS MEASURED IN: Ubuntu 24.04 +
-    # Swift 6.3.3, matching the 2026-08-10 proof exactly. This is deliberately
+    # Swift 6.4.2, matching the 2026-08-10 proof exactly. This is deliberately
     # NOT ci.yml's swift:6.0.3-jammy, and the two pins answer different
     # questions: ci.yml pins the package's declared minimum tools version to
     # prove the floor still builds; this job pins the measured environment so
     # that a failure here means the ENGINE changed, not the SDK. Note honestly
     # that the archive-linked path has never been built on 6.0.3 — nothing here
     # claims it works there.
-    container: swift:6.3.3-noble
+    container: swift:6.4.2-noble
 
     # EVERY `run:` STEP GETS bash, EXPLICITLY. Inside this container GitHub
     # resolved the default step shell to `sh` (dash), and dash has no

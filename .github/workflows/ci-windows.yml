@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   windows:
-    name: SwiftReckless — Windows gate / tests (Swift 6.3.3, x86_64-msvc)
+    name: SwiftReckless — Windows gate / tests (Swift 6.4.2, x86_64-msvc)
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -47,7 +47,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # 6.3.3 is current and is the toolchain the Fianchetto stack's Windows
+      # 6.4.2 is current; 6.3.3 is the toolchain the Fianchetto stack's Windows
       # results were measured on. The Linux jobs deliberately pin the package's
       # declared MINIMUM to prove the floor still builds; this job is about
       # platform coverage, so it takes the ceiling. Pin the floor here only if
@@ -55,7 +55,7 @@ jobs:
       # not behind.
       # continue-on-error IS NOT a weakened gate here, and the reason matters.
       # This action ends with its own `swift --version` check, which races its
-      # own PATH refresh: the installer runs elevated as SYSTEM while Swift 6.3.3
+      # own PATH refresh: the installer runs elevated as SYSTEM while Swift 6.4.2
       # installs per-user, so whether the toolchain bin has reached the Machine
       # or User environment block by the time the action looks is a coin toss.
       # MEASURED 2026-09-01: the identical workflow, action and inputs passed for
@@ -72,8 +72,8 @@ jobs:
         continue-on-error: true
         uses: compnerd/gha-setup-swift@main
         with:
-          branch: swift-6.3.3-release
-          tag: 6.3.3-RELEASE
+          branch: swift-6.4.2-release
+          tag: 6.4.2-RELEASE
 
       # Neither arrives on PATH by itself, measured on FianchettoKit CI
       # 2026-09-01: the installer runs elevated as SYSTEM while Swift installs
@@ -103,7 +103,7 @@ jobs:
             exit 0
           }
           Write-Host "::warning::swift.exe absent after a install that reported success. Retrying once."
-          $url = "https://download.swift.org/swift-6.3.3-release/windows10/swift-6.3.3-RELEASE/swift-6.3.3-RELEASE-windows10.exe"
+          $url = "https://download.swift.org/swift-6.4.2-release/windows10/swift-6.4.2-RELEASE/swift-6.4.2-RELEASE-windows10.exe"
           $exe = Join-Path $env:TEMP "swift-retry.exe"
           Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
           $p = Start-Process -FilePath $exe -ArgumentList "/quiet" -Wait -PassThru

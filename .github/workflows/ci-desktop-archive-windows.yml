@@ -108,8 +108,8 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # 6.3.3 matches the environment the Linux proof was measured in
-      # (swift:6.3.3-noble), so a failure here means the ENGINE changed rather
+      # 6.4.2 matches the environment the Linux proof was measured in
+      # (swift:6.4.2-noble), so a failure here means the ENGINE changed rather
       # than the SDK — the same reasoning ci-desktop-archive.yml gives for
       # pinning its container.
       #
@@ -122,8 +122,8 @@ jobs:
         continue-on-error: true
         uses: compnerd/gha-setup-swift@main
         with:
-          branch: swift-6.3.3-release
-          tag: 6.3.3-RELEASE
+          branch: swift-6.4.2-release
+          tag: 6.4.2-RELEASE
           build_arch: ${{ matrix.build_arch }}
 
       # The installer has been measured exiting 0 without laying down the
@@ -138,8 +138,8 @@ jobs:
           if ($found) { Write-Host "Toolchain present: $($found.FullName)"; exit 0 }
           Write-Host "::warning::swift.exe absent after an install that reported success. Retrying once."
           $arch = if ("${{ matrix.build_arch }}" -eq "arm64") { "arm64" } else { "" }
-          $name = if ($arch) { "swift-6.3.3-RELEASE-windows10-arm64.exe" } else { "swift-6.3.3-RELEASE-windows10.exe" }
-          $url  = "https://download.swift.org/swift-6.3.3-release/windows10$(if($arch){'-arm64'})/swift-6.3.3-RELEASE/$name"
+          $name = if ($arch) { "swift-6.4.2-RELEASE-windows10-arm64.exe" } else { "swift-6.4.2-RELEASE-windows10.exe" }
+          $url  = "https://download.swift.org/swift-6.4.2-release/windows10$(if($arch){'-arm64'})/swift-6.4.2-RELEASE/$name"
           $exe  = Join-Path $env:TEMP "swift-retry.exe"
           Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
           $p = Start-Process -FilePath $exe -ArgumentList "/quiet" -Wait -PassThru
